@@ -13,6 +13,7 @@ package ch.castleridge.javals.indexing.source;
 import ch.castleridge.javals.indexing.index.Index;
 import ch.castleridge.javals.indexing.source.ecj.EcjSourceIndexer;
 import ch.castleridge.javals.indexing.source.javac.JavacSourceIndexer;
+import ch.castleridge.javals.indexing.source.turbine.TurbineSourceIndexer;
 
 /**
  * Parses a single Java source file and emits type entries into an {@link Index}.
@@ -31,6 +32,10 @@ public interface SourceIndexer {
         return EcjSourceIndexer.INSTANCE;
     }
 
+    static SourceIndexer turbine() {
+        return TurbineSourceIndexer.INSTANCE;
+    }
+
     static SourceIndexer of(String name) {
         if (name == null || name.isBlank()) {
             return javac();
@@ -38,6 +43,7 @@ public interface SourceIndexer {
         return switch (name.trim().toLowerCase()) {
             case "ecj" -> ecj();
             case "javac" -> javac();
+            case "turbine" -> turbine();
             default -> javac();
         };
     }

@@ -68,11 +68,11 @@ final class InitializationOptions {
         String classIndexer = Backend.DEFAULT.classIndexer();
         String compiler = Backend.DEFAULT.compiler();
         if (backend instanceof Map<?, ?> map) {
-            sourceIndexer = readBackendName(map.get("sourceIndexer"), sourceIndexer, InitializationOptions::normalizeCompilerBackend);
+            sourceIndexer = readBackendName(map.get("sourceIndexer"), sourceIndexer, InitializationOptions::normalizeSourceIndexer);
             classIndexer = readBackendName(map.get("classIndexer"), classIndexer, InitializationOptions::normalizeClassIndexer);
             compiler = readBackendName(map.get("compiler"), compiler, InitializationOptions::normalizeCompilerBackend);
         } else if (backend instanceof JsonObject json) {
-            sourceIndexer = readBackendName(json.get("sourceIndexer"), sourceIndexer, InitializationOptions::normalizeCompilerBackend);
+            sourceIndexer = readBackendName(json.get("sourceIndexer"), sourceIndexer, InitializationOptions::normalizeSourceIndexer);
             classIndexer = readBackendName(json.get("classIndexer"), classIndexer, InitializationOptions::normalizeClassIndexer);
             compiler = readBackendName(json.get("compiler"), compiler, InitializationOptions::normalizeCompilerBackend);
         }
@@ -113,6 +113,14 @@ final class InitializationOptions {
         String n = raw.trim().toLowerCase(Locale.ROOT);
         return switch (n) {
             case "javac", "ecj" -> n;
+            default -> Backend.DEFAULT.sourceIndexer();
+        };
+    }
+
+    private static String normalizeSourceIndexer(String raw) {
+        String n = raw.trim().toLowerCase(Locale.ROOT);
+        return switch (n) {
+            case "javac", "ecj", "turbine" -> n;
             default -> Backend.DEFAULT.sourceIndexer();
         };
     }

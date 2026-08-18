@@ -122,7 +122,7 @@ Settings are passed by the client in LSP `initialize` → `initializationOptions
 | --- | --- | --- | --- |
 | `workspacePath` | string | first workspace folder (else parent of `mbt.json`) | Root used to resolve relative paths from `mbt.json` |
 | `referencesCandidateCap` | number | uncapped (`≤ 0` or omitted) | Max candidate files scanned for find-references after Bloom filtering; open documents and the origin file are always included |
-| `backend.sourceIndexer` | `"javac"` \| `"ecj"` | `"javac"` | Compiler used when indexing sources |
+| `backend.sourceIndexer` | `"javac"` \| `"ecj"` \| `"turbine"` | `"javac"` | Parser used when indexing sources |
 | `backend.classIndexer` | `"asm"` \| `"turbine"` | `"asm"` | Class-file reader used when indexing jars / JRT |
 | `backend.compiler` | `"javac"` \| `"ecj"` | `"javac"` | Compiler used when analyzing open files (diagnostics, navigation, etc.) |
 

@@ -65,13 +65,13 @@ class InitializationOptionsTest {
 
         Map<String, Object> options = new HashMap<>();
         options.put("backend", Map.of(
-                "sourceIndexer", "ecj",
+                "sourceIndexer", "TURBINE",
                 "classIndexer", "turbine",
                 "compiler", "ECJ"));
         InitializeParams params = new InitializeParams();
         params.setInitializationOptions(options);
         InitializationOptions.Backend backend = InitializationOptions.backend(params);
-        assertEquals("ecj", backend.sourceIndexer());
+        assertEquals("turbine", backend.sourceIndexer());
         assertEquals("turbine", backend.classIndexer());
         assertEquals("ecj", backend.compiler());
 

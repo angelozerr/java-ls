@@ -30,16 +30,20 @@ import ch.castleridge.javals.indexing.model.MethodEntry;
 import ch.castleridge.javals.indexing.model.TypeEntry;
 import ch.castleridge.javals.indexing.source.ecj.EcjSourceIndexer;
 import ch.castleridge.javals.indexing.source.javac.JavacSourceIndexer;
+import ch.castleridge.javals.indexing.source.turbine.TurbineSourceIndexer;
 
 /**
- * Dual-run visibility contract shared by javac and ECJ source indexers.
+ * Visibility contract shared by all source indexers.
  */
 class SourceIndexerDualBackendVisibilityTest {
     private static final String RESOURCE_URI = "mem:///Visible.java";
     private static final String SOURCE_URI = "index:///source/";
 
     static Stream<SourceIndexer> indexers() {
-        return Stream.of(JavacSourceIndexer.INSTANCE, EcjSourceIndexer.INSTANCE);
+        return Stream.of(
+                JavacSourceIndexer.INSTANCE,
+                EcjSourceIndexer.INSTANCE,
+                TurbineSourceIndexer.INSTANCE);
     }
 
     @ParameterizedTest
