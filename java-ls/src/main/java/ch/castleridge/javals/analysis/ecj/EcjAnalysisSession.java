@@ -57,6 +57,7 @@ import org.eclipse.lsp4j.SymbolKind;
 import org.eclipse.lsp4j.TypeHierarchyItem;
 
 import ch.castleridge.javals.analysis.AnalysisSession;
+import ch.castleridge.javals.analysis.Declaration;
 import ch.castleridge.javals.analysis.PublishedDiagnostic;
 import ch.castleridge.javals.analysis.ResolvedSymbol;
 import ch.castleridge.javals.analysis.SymbolIdentity;
@@ -217,6 +218,31 @@ final class EcjAnalysisSession implements AnalysisSession {
         if (binding.isAnnotationType() || binding.isInterface()) return SymbolKind.Interface;
         if (binding.isEnum()) return SymbolKind.Enum;
         return SymbolKind.Class;
+    }
+
+    @Override
+    public List<Declaration> declarations() {
+        if (!isUsable()) return List.of();
+        List<Declaration> result = new ArrayList<>();
+        visitOccurrences(occurrence -> {
+            if (!occurrence.declaration()) return;
+            Declaration.Kind kind = declarationKind(occurrence.binding());
+            if (kind == null) return;
+            SymbolIdentity identity = identityOf(occurrence.binding());
+            if (identity == null || identity.fileLocal()) return;
+            Range range = new Range(
+                    EcjAnalysisEngine.positionAt(source, occurrence.start()),
+                    EcjAnalysisEngine.positionAt(source, occurrence.end() + 1));
+            result.add(new Declaration(identity.simpleName(), range, identity, kind));
+        });
+        return result;
+    }
+
+    private static Declaration.Kind declarationKind(Binding binding) {
+        if (binding instanceof ReferenceBinding) return Declaration.Kind.TYPE;
+        if (binding instanceof MethodBinding) return Declaration.Kind.METHOD;
+        if (binding instanceof FieldBinding) return Declaration.Kind.FIELD;
+        return null;
     }
 
     @Override
@@ -616,7 +642,17 @@ final class EcjAnalysisSession implements AnalysisSession {
     private boolean declares(String ownerJvm) {
         if (unit.types == null) return false;
         for (TypeDeclaration type : unit.types) {
-            if (type.binding != null && ownerJvm.equals(new String(type.binding.constantPoolName()))) return true;
+            if (declaresRecursive(type, ownerJvm)) return true;
+        }
+        return false;
+    }
+
+    private static boolean declaresRecursive(TypeDeclaration type, String ownerJvm) {
+        if (type.binding != null && ownerJvm.equals(new String(type.binding.constantPoolName()))) return true;
+        if (type.memberTypes != null) {
+            for (TypeDeclaration member : type.memberTypes) {
+                if (declaresRecursive(member, ownerJvm)) return true;
+            }
         }
         return false;
     }

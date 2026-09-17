@@ -68,6 +68,12 @@ public interface AnalysisSession {
     List<TypeHierarchyItem> typeHierarchySubtypes(TypeHierarchyItem item);
 
     /**
+     * Non-file-local declarations (types, methods, fields) in the analyzed
+     * source, suitable for CodeLens reference counting.
+     */
+    List<Declaration> declarations();
+
+    /**
      * True when the session has a usable attributed AST.
      */
     boolean isUsable();

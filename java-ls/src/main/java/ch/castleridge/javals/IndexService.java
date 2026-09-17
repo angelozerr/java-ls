@@ -25,6 +25,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 
+import ch.castleridge.javals.settings.InitializationOptions;
 import ch.castleridge.javals.indexing.cli.HeapSizeEstimator;
 import ch.castleridge.javals.indexing.mbt.*;
 import ch.castleridge.javals.indexing.scan.*;

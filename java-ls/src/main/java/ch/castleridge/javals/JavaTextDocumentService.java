@@ -10,6 +10,8 @@
  */
 package ch.castleridge.javals;
 
+import com.google.gson.JsonObject;
+
 import org.eclipse.lsp4j.*;
 import org.eclipse.lsp4j.jsonrpc.messages.Either;
 import org.eclipse.lsp4j.jsonrpc.messages.Either3;
@@ -28,6 +30,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import ch.castleridge.javals.analysis.AnalysisSession;
 import ch.castleridge.javals.analysis.BackendFactory;
+import ch.castleridge.javals.analysis.Declaration;
 import ch.castleridge.javals.analysis.PublishedDiagnostic;
 import ch.castleridge.javals.analysis.ResolvedSymbol;
 import ch.castleridge.javals.analysis.SymbolIdentity;
@@ -55,8 +58,6 @@ public class JavaTextDocumentService implements TextDocumentService {
     private final SymbolLocator symbolLocator = new SymbolLocator(sourceCache);
     private final EcjDeclarationLocator declarationLocator = new EcjDeclarationLocator();
     private volatile WorkspaceCompiler workspaceCompiler = BackendFactory.workspaceCompiler("javac");
-    /** Max files to scan for cross-file references; {@code <= 0} means no cap. */
-    private volatile int referencesCandidateCap;
     private final ScheduledExecutorService refreshScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "index-refresh-debounce");
         t.setDaemon(true);
@@ -76,12 +77,8 @@ public class JavaTextDocumentService implements TextDocumentService {
                 : workspaceCompiler;
     }
 
-    public void setReferencesCandidateCap(int referencesCandidateCap) {
-        this.referencesCandidateCap = referencesCandidateCap;
-    }
-
     int referencesCandidateCap() {
-        return referencesCandidateCap;
+        return server.getSettingsSupport().getReferencesCandidateCap();
     }
 
     SymbolLocator symbolLocator() {
@@ -356,51 +353,19 @@ public class JavaTextDocumentService implements TextDocumentService {
             return finalizeReferences(locations, includeDeclaration, session, resolved);
         }
 
-        Set<String> bloomCandidates = new LinkedHashSet<>();
-        Optional<Index> indexOpt = indexService.index();
-        if (indexOpt.isPresent()) {
-            String simpleName = identity.simpleName();
-            for (BloomEntry entry : indexOpt.get().bloomFilters()) {
-                // Only source blooms can yield source reference locations.
-                // Classfile-keyed blooms (jar/jrt *.class) would otherwise be
-                // read as text and compiled as garbage, so skip them here.
-                String path = entry.resourcePath();
-                if (path != null && path.endsWith(".java") && entry.filter().mightContain(simpleName)) {
-                    String candidateUri = entry.resourceUri();
-                    if (candidateUri != null) {
-                        bloomCandidates.add(candidateUri);
-                    }
-                }
-            }
-        }
-        int bloomHits = bloomCandidates.size();
-        int openDocs = documents.size();
+        Set<String> candidates = referenceCandidates(identity);
 
-        Set<String> candidates = new LinkedHashSet<>(bloomCandidates);
-        candidates.addAll(documents.keySet());
-        resolved.originResourceUri().filter(u -> u.endsWith(".java")).ifPresent(candidates::add);
+        Set<Location> locations = findCrossFileReferences(identity, candidates);
 
-        int totalBeforeCap = candidates.size();
-        String capNote = "";
-        if (referencesCandidateCap > 0 && candidates.size() > referencesCandidateCap) {
-            Set<String> capped = new LinkedHashSet<>(documents.keySet());
-            resolved.originResourceUri().filter(u -> u.endsWith(".java")).ifPresent(capped::add);
-            for (String candidateUri : bloomCandidates) {
-                if (capped.size() >= referencesCandidateCap) {
-                    break;
-                }
-                capped.add(candidateUri);
-            }
-            candidates = capped;
-            capNote = ", capped " + candidates.size() + "/" + totalBeforeCap;
-        }
+        return finalizeReferences(locations, includeDeclaration, session, resolved);
+    }
 
-        server.logMessage(MessageType.Log,
-                "References: '" + identity.simpleName() + "' -> " + candidates.size()
-                        + " candidates (" + bloomHits + " bloom hits, " + openDocs + " open docs"
-                        + capNote
-                        + resolved.originResourceUri().map(u -> ", origin " + u).orElse("") + ")");
-
+    /**
+     * Scans candidate files in parallel to find references matching the given
+     * identity. Used by both {@code textDocument/references} and
+     * {@code codeLens/resolve}.
+     */
+    private Set<Location> findCrossFileReferences(SymbolIdentity identity, Set<String> candidates) {
         long t0 = System.nanoTime();
         Set<Location> locations = Collections.synchronizedSet(new LinkedHashSet<>());
         candidates.parallelStream().forEach(candidateUri -> {
@@ -438,9 +403,145 @@ public class JavaTextDocumentService implements TextDocumentService {
         server.logMessage(MessageType.Log,
                 "References: resolved " + locations.size() + " references across "
                         + candidates.size() + " files in " + elapsedMs + " ms");
-
-        return finalizeReferences(locations, includeDeclaration, session, resolved);
+        return locations;
     }
+
+    /**
+     * Builds the set of candidate file URIs to scan for references to the
+     * given identity, using bloom filters and open documents.
+     */
+    private Set<String> referenceCandidates(SymbolIdentity identity) {
+        Set<String> bloomCandidates = new LinkedHashSet<>();
+        Optional<Index> indexOpt = indexService.index();
+        if (indexOpt.isPresent()) {
+            String simpleName = identity.simpleName();
+            for (BloomEntry entry : indexOpt.get().bloomFilters()) {
+                String path = entry.resourcePath();
+                if (path != null && path.endsWith(".java") && entry.filter().mightContain(simpleName)) {
+                    String candidateUri = entry.resourceUri();
+                    if (candidateUri != null) {
+                        bloomCandidates.add(candidateUri);
+                    }
+                }
+            }
+        }
+        int bloomHits = bloomCandidates.size();
+
+        Set<String> candidates = new LinkedHashSet<>(bloomCandidates);
+        candidates.addAll(documents.keySet());
+        identity.originResourceUri().filter(u -> u.endsWith(".java")).ifPresent(candidates::add);
+
+        int cap = referencesCandidateCap();
+        if (cap > 0 && candidates.size() > cap) {
+            Set<String> capped = new LinkedHashSet<>(documents.keySet());
+            identity.originResourceUri().filter(u -> u.endsWith(".java")).ifPresent(capped::add);
+            for (String candidateUri : bloomCandidates) {
+                if (capped.size() >= cap) break;
+                capped.add(candidateUri);
+            }
+            candidates = capped;
+        }
+
+        server.logMessage(MessageType.Log,
+                "References: '" + identity.simpleName() + "' -> " + candidates.size()
+                        + " candidates (" + bloomHits + " bloom hits)");
+        return candidates;
+    }
+
+    // --- CodeLens (references) ------------------------------------------------
+
+    @Override
+    public CompletableFuture<List<? extends CodeLens>> codeLens(CodeLensParams params) {
+        String uri = UriCoding.decode(params.getTextDocument().getUri());
+        return CompletableFuture.supplyAsync(() -> computeCodeLens(uri));
+    }
+
+    /**
+     * Aggregates CodeLens from all providers (currently: references).
+     * Add new CodeLens types here as new {@code collect*CodeLens} methods.
+     */
+    private List<CodeLens> computeCodeLens(String uri) {
+        CachedCompile cached = compileCache.get(uri);
+        if (cached == null || cached.session() == null || !cached.session().isUsable()) {
+            return List.of();
+        }
+        List<CodeLens> lenses = new ArrayList<>();
+        collectReferencesCodeLens(uri, cached, lenses);
+        return lenses;
+    }
+
+    /**
+     * Adds one "references" CodeLens per enabled declaration kind.
+     */
+    private void collectReferencesCodeLens(String uri, CachedCompile cached, List<CodeLens> lenses) {
+        Set<Declaration.Kind> enabledKinds = server.getSettingsSupport().getCodeLensShowReferences();
+        if (enabledKinds.isEmpty()) return;
+        List<Declaration> declarations = cached.session().declarations();
+        for (Declaration decl : declarations) {
+            if (!enabledKinds.contains(decl.kind())) continue;
+            CodeLens lens = new CodeLens(decl.nameRange());
+            lens.setData(codeLensData(uri, decl.identity()));
+            lenses.add(lens);
+        }
+    }
+
+    @Override
+    public CompletableFuture<CodeLens> resolveCodeLens(CodeLens codeLens) {
+        return CompletableFuture.supplyAsync(() -> computeResolveCodeLens(codeLens));
+    }
+
+    /**
+     * Resolves a single CodeLens by counting cross-file references for the
+     * symbol identity stored in its {@code data} field.
+     */
+    private CodeLens computeResolveCodeLens(CodeLens codeLens) {
+        if (!(codeLens.getData() instanceof JsonObject data)) {
+            return codeLens;
+        }
+        SymbolIdentity identity = identityFromData(data);
+        if (identity == null) {
+            codeLens.setCommand(new Command("0 references", "java.action.showReferences"));
+            return codeLens;
+        }
+
+        String uri = data.get("uri").getAsString();
+        Set<String> candidates = referenceCandidates(identity);
+        Set<Location> locations = findCrossFileReferences(identity, candidates);
+
+        int count = locations.size();
+        String title = count == 1 ? "1 reference" : count + " references";
+        Command command = new Command(title, "editor.action.showReferences");
+        command.setArguments(List.of(uri, codeLens.getRange().getStart(), new ArrayList<>(locations)));
+        codeLens.setCommand(command);
+        return codeLens;
+    }
+
+    /**
+     * Serializes a symbol identity into a CodeLens data payload.
+     */
+    private static JsonObject codeLensData(String uri, SymbolIdentity identity) {
+        JsonObject data = new JsonObject();
+        data.addProperty("uri", uri);
+        data.addProperty("matchKey", identity.matchKey());
+        data.addProperty("simpleName", identity.simpleName());
+        identity.originResourceUri().ifPresent(o -> data.addProperty("originResourceUri", o));
+        return data;
+    }
+
+    /**
+     * Reconstructs a {@link SymbolIdentity} from a CodeLens data payload.
+     */
+    private static SymbolIdentity identityFromData(JsonObject data) {
+        if (!data.has("matchKey") || !data.has("simpleName")) return null;
+        String matchKey = data.get("matchKey").getAsString();
+        String simpleName = data.get("simpleName").getAsString();
+        Optional<String> origin = data.has("originResourceUri")
+                ? Optional.of(data.get("originResourceUri").getAsString())
+                : Optional.empty();
+        return new SymbolIdentity(matchKey, simpleName, false, origin);
+    }
+
+    // --- Type hierarchy ------------------------------------------------------
 
     @Override
     public CompletableFuture<List<TypeHierarchyItem>> prepareTypeHierarchy(TypeHierarchyPrepareParams params) {

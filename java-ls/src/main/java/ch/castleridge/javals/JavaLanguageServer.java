@@ -1,8 +1,8 @@
 /**
  * Copyright 2026 by Anysphere Inc.
- * 
+ *
  * Licensed under the MIT License.
- * 
+ *
  * SPDX-License-Identifier: MIT
  *
  * Author: Thomas Mäder, Castle Ridge Software
@@ -13,20 +13,26 @@ package ch.castleridge.javals;
 import org.eclipse.lsp4j.*;
 import org.eclipse.lsp4j.jsonrpc.messages.Either;
 import org.eclipse.lsp4j.services.*;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+
+import ch.castleridge.javals.settings.JavaLSSettings;
+import ch.castleridge.javals.settings.JavaLSSettingsSupport;
+
 /**
- * Main Language Server implementation for Java LSP
+ * Main Language Server implementation for Java LSP.
  */
 public class JavaLanguageServer implements LanguageServer, LanguageClientAware {
-    
+
     private final TextDocumentService textDocumentService;
     private final WorkspaceService workspaceService;
     private final IndexService indexService;
+    private final JavaLSSettingsSupport settingsSupport;
     private LanguageClient client;
     private int errorCode = 1;
     private volatile String compilerBackend = "javac";
@@ -36,6 +42,7 @@ public class JavaLanguageServer implements LanguageServer, LanguageClientAware {
         this.indexService = new IndexService(this);
         this.textDocumentService = new JavaTextDocumentService(this, indexService);
         this.workspaceService = new JavaWorkspaceService(this);
+        this.settingsSupport = new JavaLSSettingsSupport(this::getClient);
         indexService.addIndexChangedListener(this::rebindWorkspaceCompiler);
     }
 
@@ -52,68 +59,76 @@ public class JavaLanguageServer implements LanguageServer, LanguageClientAware {
         return indexService;
     }
 
+    public JavaLSSettingsSupport getSettingsSupport() {
+        return settingsSupport;
+    }
+
     @Override
     public CompletableFuture<InitializeResult> initialize(InitializeParams params) {
-        InitializationOptions.Backend backend = InitializationOptions.backend(params);
-        this.compilerBackend = backend.compiler();
+        JavaLSSettings settings = settingsSupport.initialize(params);
+        JavaLSSettings.BackendSettings backend = settings.getBackendOrDefault();
+        this.compilerBackend = backend.getCompiler();
         this.watchedFilesDynamicRegistration = supportsWatchedFilesDynamicRegistration(params);
         indexService.setSourceIndexer(
-                ch.castleridge.javals.indexing.source.SourceIndexer.of(backend.sourceIndexer()));
+                ch.castleridge.javals.indexing.source.SourceIndexer.of(backend.getSourceIndexer()));
         indexService.setBytecodeIndexer(
-                ch.castleridge.javals.indexing.bytecode.BytecodeIndexer.of(backend.classIndexer()));
+                ch.castleridge.javals.indexing.bytecode.BytecodeIndexer.of(backend.getClassIndexer()));
         rebindWorkspaceCompiler();
         logMessage(MessageType.Info,
-                "Backend: sourceIndexer=" + backend.sourceIndexer()
-                        + ", classIndexer=" + backend.classIndexer()
-                        + ", compiler=" + backend.compiler());
+                "Backend: sourceIndexer=" + backend.getSourceIndexer()
+                        + ", classIndexer=" + backend.getClassIndexer()
+                        + ", compiler=" + backend.getCompiler());
 
         indexService.initialize(params);
-        InitializationOptions.referencesCandidateCap(params)
-                .ifPresent(((JavaTextDocumentService) textDocumentService)::setReferencesCandidateCap);
 
         // Set up server capabilities
         ServerCapabilities capabilities = new ServerCapabilities();
-        
+
         // Text document sync
         capabilities.setTextDocumentSync(TextDocumentSyncKind.Full);
-        
+
         // Completion support
         CompletionOptions completionOptions = new CompletionOptions();
         completionOptions.setResolveProvider(true);
         completionOptions.setTriggerCharacters(java.util.Arrays.asList(".", "@"));
         capabilities.setCompletionProvider(completionOptions);
-        
+
         // Hover support
         capabilities.setHoverProvider(true);
-        
+
         // Definition support
         capabilities.setDefinitionProvider(true);
-        
+
         // References support
         capabilities.setReferencesProvider(true);
 
-        // Type hierarchy (prepare + subtypes + supertypes)
+        // CodeLens support
+        CodeLensOptions codeLensOptions = new CodeLensOptions();
+        codeLensOptions.setResolveProvider(true);
+        capabilities.setCodeLensProvider(codeLensOptions);
+
+        // Type hierarchy support
         capabilities.setTypeHierarchyProvider(true);
-        
+
         // Document symbol support
         capabilities.setDocumentSymbolProvider(true);
-        
+
         // Workspace symbol support
         capabilities.setWorkspaceSymbolProvider(true);
-        
+
         // Code action support
         capabilities.setCodeActionProvider(true);
-        
-        // Document formatting
+
+        // Document formatting support
         capabilities.setDocumentFormattingProvider(true);
         capabilities.setDocumentRangeFormattingProvider(true);
-        
+
         // Rename support
         RenameOptions renameOptions = new RenameOptions();
         renameOptions.setPrepareProvider(true);
         capabilities.setRenameProvider(renameOptions);
-        
-        // Signature help
+
+        // Signature help support
         SignatureHelpOptions signatureHelpOptions = new SignatureHelpOptions();
         signatureHelpOptions.setTriggerCharacters(java.util.Arrays.asList("(", ","));
         capabilities.setSignatureHelpProvider(signatureHelpOptions);
@@ -124,7 +139,7 @@ public class JavaLanguageServer implements LanguageServer, LanguageClientAware {
 
     /**
      * Dynamically register {@code workspace/didChangeWatchedFiles} watchers for
-     * {@code **}/{@code *.java} under each mbt source root, when the client supports it.
+     * {@code **}/{@code *.java} under each source root, when the client supports it.
      */
     public void registerSourceFileWatchers(List<String> sourceRootUris) {
         if (!watchedFilesDynamicRegistration || client == null

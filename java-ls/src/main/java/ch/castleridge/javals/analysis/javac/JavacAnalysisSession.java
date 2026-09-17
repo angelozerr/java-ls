@@ -33,12 +33,19 @@ import org.eclipse.lsp4j.Range;
 import org.eclipse.lsp4j.SymbolKind;
 import org.eclipse.lsp4j.TypeHierarchyItem;
 
+import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.LineMap;
+import com.sun.source.tree.MethodTree;
+import com.sun.source.tree.Tree;
+import com.sun.source.tree.VariableTree;
+import com.sun.source.util.SourcePositions;
 import com.sun.source.util.TreePath;
+import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.Trees;
 
 import ch.castleridge.javals.analysis.AnalysisSession;
+import ch.castleridge.javals.analysis.Declaration;
 import ch.castleridge.javals.analysis.PublishedDiagnostic;
 import ch.castleridge.javals.analysis.ResolvedSymbol;
 import ch.castleridge.javals.analysis.SymbolIdentity;
@@ -163,6 +170,61 @@ public final class JavacAnalysisSession implements AnalysisSession {
         }
         return symbolLocator.locate(
                 jrs.element(), result.trees(), result.cu(), docUri, sourceJarByBinaryJar);
+    }
+
+    @Override
+    public List<Declaration> declarations() {
+        if (!isUsable()) return List.of();
+        List<Declaration> declarations = new ArrayList<>();
+        Trees trees = result.trees();
+        SourcePositions sourcePositions = trees.getSourcePositions();
+        CompilationUnitTree cu = result.cu();
+        LineMap lineMap = cu.getLineMap();
+        Elements elements = result.task().getElements();
+        Types types = result.task().getTypes();
+
+        new TreePathScanner<Void, Void>() {
+
+            @Override
+            public Void visitClass(ClassTree node, Void unused) {
+                collect(node, Declaration.Kind.TYPE);
+                return super.visitClass(node, unused);
+            }
+
+            @Override
+            public Void visitMethod(MethodTree node, Void unused) {
+                collect(node, Declaration.Kind.METHOD);
+                return super.visitMethod(node, unused);
+            }
+
+            @Override
+            public Void visitVariable(VariableTree node, Void unused) {
+                Element element = trees.getElement(getCurrentPath());
+                // Only collect fields, not local variables or parameters.
+                if (element != null && element.getKind() == ElementKind.FIELD) {
+                    collect(node, Declaration.Kind.FIELD);
+                }
+                return super.visitVariable(node, unused);
+            }
+
+            private void collect(Tree node, Declaration.Kind kind) {
+                TreePath path = getCurrentPath();
+                Element element = trees.getElement(path);
+                if (element == null) return;
+                Optional<SymbolKey> keyOpt = SymbolKey.of(element, elements, types, trees);
+                if (keyOpt.isEmpty()) return;
+                SymbolIdentity identity = keyOpt.get().toIdentity();
+                if (identity.fileLocal()) return;
+
+                long start = sourcePositions.getStartPosition(cu, node);
+                if (start < 0) return;
+                Position pos = LspPositions.positionAt(lineMap, start);
+                Range range = new Range(pos, pos);
+                declarations.add(new Declaration(identity.simpleName(), range, identity, kind));
+            }
+        }.scan(cu, null);
+
+        return declarations;
     }
 
     @Override

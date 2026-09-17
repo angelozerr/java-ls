@@ -1,8 +1,8 @@
 /**
  * Copyright 2026 by Anysphere Inc.
- * 
+ *
  * Licensed under the MIT License.
- * 
+ *
  * SPDX-License-Identifier: MIT
  *
  * Author: Thomas Mäder, Castle Ridge Software
@@ -17,6 +17,9 @@ import org.eclipse.lsp4j.InitializeParams;
 import org.junit.jupiter.api.Test;
 
 import com.google.gson.JsonObject;
+
+import ch.castleridge.javals.settings.InitializationOptions;
+import ch.castleridge.javals.settings.JavaLSSettings;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -58,10 +61,11 @@ class InitializationOptionsTest {
 
     @Test
     void backendDefaultsAndReadsNestedConfig() {
-        InitializationOptions.Backend defaults = InitializationOptions.backend(new InitializeParams());
-        assertEquals("javac", defaults.sourceIndexer());
-        assertEquals("asm", defaults.classIndexer());
-        assertEquals("javac", defaults.compiler());
+        JavaLSSettings.BackendSettings defaults = InitializationOptions.settings(new InitializeParams())
+                .getBackendOrDefault();
+        assertEquals("javac", defaults.getSourceIndexer());
+        assertEquals("asm", defaults.getClassIndexer());
+        assertEquals("javac", defaults.getCompiler());
 
         Map<String, Object> options = new HashMap<>();
         options.put("backend", Map.of(
@@ -70,10 +74,11 @@ class InitializationOptionsTest {
                 "compiler", "ECJ"));
         InitializeParams params = new InitializeParams();
         params.setInitializationOptions(options);
-        InitializationOptions.Backend backend = InitializationOptions.backend(params);
-        assertEquals("turbine", backend.sourceIndexer());
-        assertEquals("turbine", backend.classIndexer());
-        assertEquals("ecj", backend.compiler());
+        JavaLSSettings.BackendSettings backend = InitializationOptions.settings(params)
+                .getBackendOrDefault();
+        assertEquals("turbine", backend.getSourceIndexer());
+        assertEquals("turbine", backend.getClassIndexer());
+        assertEquals("ecj", backend.getCompiler());
 
         JsonObject json = new JsonObject();
         JsonObject backendJson = new JsonObject();
@@ -82,10 +87,10 @@ class InitializationOptionsTest {
         backendJson.addProperty("compiler", "ecj");
         json.add("backend", backendJson);
         params.setInitializationOptions(json);
-        backend = InitializationOptions.backend(params);
-        assertEquals("javac", backend.sourceIndexer());
-        assertEquals("asm", backend.classIndexer());
-        assertEquals("ecj", backend.compiler());
+        backend = InitializationOptions.settings(params).getBackendOrDefault();
+        assertEquals("javac", backend.getSourceIndexer());
+        assertEquals("asm", backend.getClassIndexer());
+        assertEquals("ecj", backend.getCompiler());
     }
 
     private static OptionalInt capFrom(Map<String, Object> options) {
