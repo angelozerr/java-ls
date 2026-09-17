@@ -282,6 +282,13 @@ public final class TypeEntryCodec {
         };
     }
 
+    private static TypeRef readTypeRefOrNull(Reader r) {
+        Type type = readType(r);
+        if (type == null) return null;
+        if (type instanceof TypeRef ref) return ref;
+        throw new IllegalArgumentException("expected TypeRef, got " + type.getClass().getName());
+    }
+
     private static void writeTypeArray(Writer w, Type[] types) {
         if (types == null || types.length == 0) {
             w.writeVarInt(0);
@@ -353,6 +360,8 @@ public final class TypeEntryCodec {
             w.writeString(f.name());
             writeType(w, f.type());
             writeBoxed(w, f.constantValue());
+            writeType(w, f.constantOwner());
+            w.writeString(f.constantName());
             writeAnnotations(w, f.annotations());
         }
     }
@@ -367,6 +376,8 @@ public final class TypeEntryCodec {
                     r.readString(),
                     readType(r),
                     readBoxed(r),
+                    readTypeRefOrNull(r),
+                    r.readString(),
                     readAnnotations(r));
         }
         return out;

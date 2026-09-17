@@ -3298,6 +3298,187 @@ class IndexCompileTest {
     }
 
     @Test
+    void sourceIndexedRecordExposesComponentsAccessorsAndCanonicalConstructor() throws Exception {
+        Path jdk = Path.of(System.getProperty("java.home"));
+        JrtInput jrt = new JrtInput(jdk);
+        String jrtUri = jrt.sourceUri().toString();
+        String cpUri = "index:///cp/records/";
+
+        Index index = new InMemoryIndex();
+        assertTrue(new Scanner().scanAll(List.of(jrt), index).isEmpty());
+
+        JavacSourceIndexer.index("mem:///Point.java", cpUri,
+                """
+                        package p;
+                        public record Point(int x, int y) {}
+                        """,
+                index);
+        JavacSourceIndexer.index("mem:///Box.java", cpUri,
+                """
+                        package p;
+                        public record Box(int n) {
+                            public Box {
+                                if (n < 0) throw new IllegalArgumentException();
+                            }
+                        }
+                        """,
+                index);
+        JavacSourceIndexer.index("mem:///TrinoNumber.java", cpUri,
+                """
+                        package p;
+                        public sealed interface TrinoNumber {
+                            record Infinity(boolean negative) implements TrinoNumber {}
+                            record NotANumber() implements TrinoNumber {}
+                            record BigDecimalValue(java.math.BigDecimal value) implements TrinoNumber {}
+                        }
+                        """,
+                index);
+
+        TypeEntry point = ch.castleridge.javals.IndexTestUtils.get(index, "p/Point");
+        assertNotNull(point);
+        assertEquals(2, point.recordComponents().length);
+
+        ClasspathOrder cp = classPathOf(List.of(cpUri, jrtUri));
+        var errors = compileSource(index, cp, "test:///User.java",
+                """
+                        package q;
+                        import p.Point;
+                        import p.Box;
+                        import p.TrinoNumber;
+                        public class User {
+                            int sum(Point p) { return p.x() + p.y(); }
+                            Point origin = new Point(0, 0);
+                            Box boxed = new Box(1);
+                            int deconstruct(Point p) {
+                                return switch (p) {
+                                    case Point(int a, int b) -> a + b;
+                                };
+                            }
+                            int nested(TrinoNumber n) {
+                                switch (n) {
+                                    case TrinoNumber.NotANumber() -> { return 0; }
+                                    case TrinoNumber.Infinity(boolean negative) -> { return negative ? -1 : 1; }
+                                    case TrinoNumber.BigDecimalValue(java.math.BigDecimal value) -> {
+                                        return value.signum();
+                                    }
+                                    default -> { return 0; }
+                                }
+                            }
+                            java.util.function.Function<Point, Integer> xs = Point::x;
+                        }
+                        """);
+        assertTrue(errors.isEmpty(),
+                () -> "source-indexed record must expose components, accessors and canonical ctor; got: " + errors);
+    }
+
+    @Test
+    void sourceIndexedFieldRefConstantsFoldForAnnotationsAndSwitches() throws Exception {
+        Path jdk = Path.of(System.getProperty("java.home"));
+        JrtInput jrt = new JrtInput(jdk);
+        String jrtUri = jrt.sourceUri().toString();
+        String cpUri = "index:///cp/constants-alias/";
+
+        Index index = new InMemoryIndex();
+        assertTrue(new Scanner().scanAll(List.of(jrt), index).isEmpty());
+
+        JavacSourceIndexer.index("mem:///Names.java", cpUri,
+                """
+                        package p;
+                        public final class Names {
+                            public static final String VALUE = "v";
+                            public static final int INSERT = 1;
+                        }
+                        """,
+                index);
+        JavacSourceIndexer.index("mem:///Aliases.java", cpUri,
+                """
+                        package p;
+                        public final class Aliases {
+                            public static final String NAME = Names.VALUE;
+                            public static final int INSERT_OPERATION_NUMBER = Names.INSERT;
+                        }
+                        """,
+                index);
+        JavacSourceIndexer.index("mem:///Ann.java", cpUri,
+                """
+                        package p;
+                        public @interface Ann {
+                            String value();
+                        }
+                        """,
+                index);
+
+        ClasspathOrder cp = classPathOf(List.of(cpUri, jrtUri));
+        var errors = compileSource(index, cp, "test:///User.java",
+                """
+                        package q;
+                        import p.Aliases;
+                        import p.Ann;
+                        @Ann(Aliases.NAME)
+                        public class User {
+                            void m(byte op) {
+                                switch (op) {
+                                    case Aliases.INSERT_OPERATION_NUMBER -> {}
+                                    default -> {}
+                                }
+                            }
+                        }
+                        """);
+        assertTrue(errors.isEmpty(),
+                () -> "aliased static-final constants must fold for annotations and switch cases; got: " + errors);
+    }
+
+    @Test
+    void sourceIndexedRepeatableAnnotationAcceptsRepeatedUse() throws Exception {
+        Path jdk = Path.of(System.getProperty("java.home"));
+        JrtInput jrt = new JrtInput(jdk);
+        String jrtUri = jrt.sourceUri().toString();
+        String cpUri = "index:///cp/repeatable/";
+
+        Index index = new InMemoryIndex();
+        assertTrue(new Scanner().scanAll(List.of(jrt), index).isEmpty());
+
+        JavacSourceIndexer.index("mem:///TypeParameter.java", cpUri,
+                """
+                        package p;
+                        import java.lang.annotation.Repeatable;
+                        import java.lang.annotation.Retention;
+                        import java.lang.annotation.RetentionPolicy;
+                        @Retention(RetentionPolicy.RUNTIME)
+                        @Repeatable(TypeParameters.class)
+                        public @interface TypeParameter {
+                            String value();
+                        }
+                        """,
+                index);
+        JavacSourceIndexer.index("mem:///TypeParameters.java", cpUri,
+                """
+                        package p;
+                        import java.lang.annotation.Retention;
+                        import java.lang.annotation.RetentionPolicy;
+                        @Retention(RetentionPolicy.RUNTIME)
+                        public @interface TypeParameters {
+                            TypeParameter[] value();
+                        }
+                        """,
+                index);
+
+        ClasspathOrder cp = classPathOf(List.of(cpUri, jrtUri));
+        var errors = compileSource(index, cp, "test:///User.java",
+                """
+                        package q;
+                        import p.TypeParameter;
+                        public class User {
+                            @TypeParameter("K")
+                            @TypeParameter("V")
+                            void m() {}
+                        }
+                        """);
+        assertTrue(errors.isEmpty(),
+                () -> "source-indexed @Repeatable annotation must allow repeated use; got: " + errors);
+    }
+
+    @Test
     void memberInterfaceOfGenericClassIsImplicitlyStatic() throws Exception {
         // Regression for the PoolWaiter<C>.Listener cascade (P8/P10): a member
         // interface is implicitly static (JLS 9.5) even when nested in a

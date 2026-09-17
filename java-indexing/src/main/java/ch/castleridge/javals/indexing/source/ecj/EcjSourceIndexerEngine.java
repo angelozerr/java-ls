@@ -297,7 +297,14 @@ final class EcjSourceIndexerEngine {
                 if (!AccessVisibility.shouldIndexMember(modifierFlags(method.modifiers), methodName)) {
                     continue;
                 }
-                methods.add(toMethodEntry(method, classTypeParams, localName));
+                MethodEntry indexed = toMethodEntry(method, classTypeParams, localName);
+                if (declKind == TypeDeclKind.RECORD
+                        && "<init>".equals(indexed.name())
+                        && indexed.parameters().length == 0
+                        && !recordComponents.isEmpty()) {
+                    indexed = indexed.withParameters(recordComponentParameters(recordComponents));
+                }
+                methods.add(indexed);
             }
         }
 
@@ -349,8 +356,17 @@ final class EcjSourceIndexerEngine {
             flags |= Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL | Opcodes.ACC_ENUM;
         }
         Object constantValue = null;
+        TypeRef constantOwner = null;
+        String constantName = null;
         if ((flags & (Opcodes.ACC_STATIC | Opcodes.ACC_FINAL)) == (Opcodes.ACC_STATIC | Opcodes.ACC_FINAL)) {
             constantValue = literalConstantValue(field.initialization);
+            if (constantValue == null) {
+                ConstantFieldRef ref = constantFieldRef(field.initialization, ownerJvm);
+                if (ref != null) {
+                    constantOwner = ref.owner;
+                    constantName = ref.name;
+                }
+            }
         }
         Type type = isEnumConstant(field)
                 ? TypeRef.resolved(ownerJvm)
@@ -360,7 +376,39 @@ final class EcjSourceIndexerEngine {
                 field.name == null ? "" : new String(field.name),
                 type,
                 constantValue,
+                constantOwner,
+                constantName,
                 annotationsOf(field.annotations, ownerJvm));
+    }
+
+    private record ConstantFieldRef(TypeRef owner, String name) {}
+
+    private static ConstantFieldRef constantFieldRef(Expression initializer, String ownerJvm) {
+        if (initializer instanceof SingleNameReference snr && snr.token != null) {
+            return new ConstantFieldRef(null, new String(snr.token));
+        }
+        if (initializer instanceof QualifiedNameReference qnr
+                && qnr.tokens != null
+                && qnr.tokens.length >= 2) {
+            String name = new String(qnr.tokens[qnr.tokens.length - 1]);
+            char[][] typeTokens = new char[qnr.tokens.length - 1][];
+            System.arraycopy(qnr.tokens, 0, typeTokens, 0, qnr.tokens.length - 1);
+            Type owner = typeRefForQualifiedTokens(typeTokens, ownerJvm);
+            if (owner instanceof TypeRef ownerRef) {
+                return new ConstantFieldRef(ownerRef, name);
+            }
+        }
+        return null;
+    }
+
+    private static ParameterEntry[] recordComponentParameters(List<RecordComponentEntry> components) {
+        ParameterEntry[] parameters = new ParameterEntry[components.size()];
+        for (int i = 0; i < components.size(); i++) {
+            RecordComponentEntry component = components.get(i);
+            parameters[i] = new ParameterEntry(
+                    component.name(), 0, component.type(), component.annotations());
+        }
+        return parameters;
     }
 
     private static MethodEntry toMethodEntry(AbstractMethodDeclaration method,

@@ -201,6 +201,29 @@ class TypeEntryCodecTest {
     }
 
     @Test
+    void roundTripsFieldConstantAliases() {
+        FieldEntry aliased = new FieldEntry(
+                9,
+                "DOUBLE",
+                TypeRef.resolved("java/lang/String"),
+                null,
+                TypeRef.unresolved("DoubleType"),
+                "NAME",
+                EmptyArrays.ANNOTATION_REF);
+        ClassFileTypeEntry original = new ClassFileTypeEntry(
+                "pkg/Holder.class", "file:///a.jar", "pkg/Holder", 1,
+                null, EmptyArrays.TYPE, EmptyArrays.TYPE_PARAM,
+                new FieldEntry[]{aliased}, EmptyArrays.METHOD, EmptyArrays.STRING,
+                EmptyArrays.TYPE_REF, EmptyArrays.RECORD_COMPONENT, EmptyArrays.ANNOTATION_REF);
+        ClassFileTypeEntry decoded = (ClassFileTypeEntry) TypeEntryCodec.decode(TypeEntryCodec.encode(original));
+        FieldEntry roundTripped = decoded.fields()[0];
+        assertEquals("DOUBLE", roundTripped.name());
+        assertEquals(null, roundTripped.constantValue());
+        assertEquals(TypeRef.unresolved("DoubleType"), roundTripped.constantOwner());
+        assertEquals("NAME", roundTripped.constantName());
+    }
+
+    @Test
     void roundTripsAnnotatedArrayType() {
         Type tree = Type.Annotated.wrap(
                 Type.array(Type.parameterized(
@@ -450,6 +473,8 @@ class TypeEntryCodecTest {
                 && Objects.equals(a.name(), b.name())
                 && deepEquals(a.type(), b.type())
                 && Objects.equals(a.constantValue(), b.constantValue())
+                && Objects.equals(a.constantOwner(), b.constantOwner())
+                && Objects.equals(a.constantName(), b.constantName())
                 && deepEquals(a.annotations(), b.annotations());
     }
 

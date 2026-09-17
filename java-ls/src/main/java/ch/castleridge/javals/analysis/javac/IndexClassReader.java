@@ -12,6 +12,9 @@ package ch.castleridge.javals.analysis.javac;
 
 import ch.castleridge.javals.classpath.ClasspathOrder;
 
+import java.util.HashSet;
+import java.util.Set;
+
 import static com.sun.tools.javac.code.Flags.MODULE;
 import com.sun.tools.javac.code.Attribute;
 import com.sun.tools.javac.code.Flags;
@@ -185,7 +188,14 @@ public final class IndexClassReader extends ClassReader {
         long flags = IndexAccessFlags.withDeprecation(
                 IndexAccessFlags.classFlags(entry), entry.annotations());
         if ((flags & MODULE) == 0) {
-            if (c.owner.kind == Kinds.Kind.PCK || c.owner.kind == Kinds.Kind.ERR) c.flags_field = flags;
+            if (c.owner.kind == Kinds.Kind.PCK || c.owner.kind == Kinds.Kind.ERR) {
+                c.flags_field = flags;
+            } else {
+                // InnerClasses already stamped 16-bit access flags. RECORD lives
+                // outside that mask (javac Flags.RECORD is 1L<<61), so promote it
+                // onto nested types completed independently of their outer.
+                c.flags_field |= flags & Flags.RECORD;
+            }
         } else {
            throw new UnsupportedOperationException("module info not supported");
         }
@@ -257,6 +267,8 @@ public final class IndexClassReader extends ClassReader {
         readRecordComponents(c, entry);
         enterSyntheticEnumMembersIfNeeded(c, entry);
         enterDefaultConstructorsIfNeeded(c, entry);
+        rewriteCompactRecordConstructorIfNeeded(c, entry);
+        enterSyntheticRecordAccessorsIfNeeded(c, entry);
         if (c.isRecord()) {
             for (RecordComponent rc: c.getRecordComponents()) {
                 rc.accessor = lookupMethod(c, rc.name, List.nil());
@@ -399,6 +411,52 @@ public final class IndexClassReader extends ClassReader {
         enterMember(c, new MethodSymbol(access, names.init, mt, c));
     }
 
+    /**
+     * A source-indexed compact constructor is stored with no parameters.
+     * Rewrite that no-arg {@code <init>} into the canonical constructor
+     * matching the record components so {@code new Point(1, 2)} type-checks.
+     */
+    private void rewriteCompactRecordConstructorIfNeeded(ClassSymbol c, TypeEntry entry) {
+        if (!(entry instanceof SourceTypeEntry) || !c.isRecord()) return;
+        if (entry.recordComponents().length == 0) return;
+        MethodSymbol noArg = lookupMethod(c, names.init, List.nil());
+        if (noArg == null) return;
+
+        ListBuffer<Type> argtypes = new ListBuffer<>();
+        ListBuffer<VarSymbol> params = new ListBuffer<>();
+        for (RecordComponentEntry rc : entry.recordComponents()) {
+            Type type = resolveType(rc.type(), currentModule, entry);
+            argtypes.add(type);
+            params.add(new VarSymbol(
+                    Flags.PARAMETER | Flags.FINAL | Flags.RECORD,
+                    names.fromString(rc.name()),
+                    type,
+                    noArg));
+        }
+        noArg.type = new MethodType(argtypes.toList(), syms.voidType, List.nil(), syms.methodClass);
+        noArg.params = params.toList();
+        noArg.flags_field |= Flags.RECORD;
+    }
+
+    /**
+     * Synthesize the implicit public no-arg accessor for each record
+     * component. Source indexing never sees these compiler-generated
+     * methods, so {@code point.x()} / {@code ViewColumn::name} would
+     * otherwise report "cannot find symbol".
+     */
+    private void enterSyntheticRecordAccessorsIfNeeded(ClassSymbol c, TypeEntry entry) {
+        if (!(entry instanceof SourceTypeEntry) || entry.recordComponents().length == 0) {
+            return;
+        }
+        for (RecordComponentEntry rc : entry.recordComponents()) {
+            Name name = names.fromString(rc.name());
+            if (lookupMethod(c, name, List.nil()) != null) continue;
+            Type type = resolveType(rc.type(), currentModule, entry);
+            MethodType mt = new MethodType(List.nil(), type, List.nil(), syms.methodClass);
+            enterMember(c, new MethodSymbol(Flags.PUBLIC, name, mt, c));
+        }
+    }
+
     private boolean hasConstructor(ClassSymbol c) {
         for (Symbol sym : c.members().getSymbolsByName(names.init)) {
             if (sym.kind == Kinds.Kind.MTH) return true;
@@ -436,12 +494,43 @@ public final class IndexClassReader extends ClassReader {
                                                        String jvmBinaryName,
                                                        ModuleSymbol module) {
         for (AnnotationRef ref : entry.annotations()) {
-            if (ref.annotationType() instanceof TypeRef.Resolved r
-                    && jvmBinaryName.equals(r.jvmBinaryName())) {
+            if (annotationTypeMatches(ref, jvmBinaryName, module, entry)) {
                 return annotations.toCompound(ref, module, entry);
             }
         }
         return null;
+    }
+
+    /**
+     * Match a declaration annotation against a well-known JVM binary name.
+     * Source indexers typically store {@code @Repeatable} as an unresolved
+     * simple name, so resolved-name equality alone never installs container
+     * metadata.
+     */
+    private boolean annotationTypeMatches(AnnotationRef ref,
+                                         String jvmBinaryName,
+                                         ModuleSymbol module,
+                                         TypeEntry entry) {
+        TypeRef type = ref.annotationType();
+        if (type instanceof TypeRef.Resolved resolved
+                && jvmBinaryName.equals(resolved.jvmBinaryName())) {
+            return true;
+        }
+        if (type instanceof TypeRef.Unresolved unresolved
+                && isWellKnownAnnotationSimpleName(unresolved.simpleName(), jvmBinaryName)) {
+            return true;
+        }
+        ClassSymbol sym = resolver.resolveTypeRef(type, module, entry);
+        return sym != null
+                && jvmBinaryName.equals(sym.flatName().toString().replace('.', '/'));
+    }
+
+    private static boolean isWellKnownAnnotationSimpleName(String simpleName, String jvmBinaryName) {
+        if (!jvmBinaryName.startsWith("java/lang/annotation/")) return false;
+        String expectedSimple = jvmBinaryName.substring("java/lang/annotation/".length());
+        if (expectedSimple.indexOf('/') >= 0) return false;
+        return expectedSimple.equals(simpleName)
+                || jvmBinaryName.equals(simpleName.replace('.', '/'));
     }
 
     /**
@@ -505,10 +594,42 @@ public final class IndexClassReader extends ClassReader {
         Type type = resolveType(field.type(), currentModule, entry);
         VarSymbol v = new VarSymbol(flags, name, type, currentOwner);
         v.setDeclarationAttributes(annotations.toCompounds(field.annotations(), currentModule, entry));
-        if (field.constantValue() != null && (v.flags_field & Flags.FINAL) != 0) {
-            v.setData(field.constantValue());
+        if ((v.flags_field & Flags.FINAL) != 0) {
+            if (field.constantValue() != null) {
+                v.setData(field.constantValue());
+            } else if (field.constantName() != null) {
+                Object folded = foldConstantValue(field, entry, new HashSet<>());
+                if (folded != null) {
+                    v.setData(folded);
+                }
+            }
         }
         return v;
+    }
+
+    /**
+     * Follow a one-or-more hop field-ref initializer ({@code X = Other.NAME})
+     * until a literal {@link FieldEntry#constantValue()} is found.
+     */
+    private Object foldConstantValue(FieldEntry field, TypeEntry enclosing, Set<String> visiting) {
+        if (field.constantValue() != null) return field.constantValue();
+        if (field.constantName() == null) return null;
+        String key = enclosing.jvmOwnerName() + "#" + field.name();
+        if (!visiting.add(key)) return null;
+
+        TypeEntry owner = enclosing;
+        if (field.constantOwner() != null) {
+            ClassSymbol ownerSym = resolver.resolveTypeRef(field.constantOwner(), currentModule, enclosing);
+            if (ownerSym == null) return null;
+            owner = pickIndexedType(ownerSym.flatName().toString().replace('.', '/'));
+            if (owner == null) return null;
+        }
+        for (FieldEntry candidate : owner.fields()) {
+            if (field.constantName().equals(candidate.name())) {
+                return foldConstantValue(candidate, owner, visiting);
+            }
+        }
+        return null;
     }
 
     private void readClassAttrs(ClassSymbol c, TypeEntry entry) {

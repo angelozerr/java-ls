@@ -108,6 +108,28 @@ class SignatureRefsTest {
     }
 
     @Test
+    void parseMethodPreservesMultiDimensionalPrimitiveArrays() {
+        SignatureRefs.MethodRefs refs = SignatureRefs.parseMethod("([[B)V");
+        assertNotNull(refs);
+        assertEquals(1, refs.paramTypes().size());
+        Type.Array outer = assertInstanceOf(Type.Array.class, refs.paramTypes().get(0));
+        Type.Array inner = assertInstanceOf(Type.Array.class, outer.element());
+        assertEquals(Type.Primitive.BYTE, inner.element());
+    }
+
+    @Test
+    void parseMethodPreservesMultiDimensionalTypeVariableArrays() {
+        SignatureRefs.MethodRefs one = SignatureRefs.parseMethod("([TT;)V");
+        Type.Array oneDim = assertInstanceOf(Type.Array.class, one.paramTypes().get(0));
+        assertEquals("T", assertInstanceOf(Type.TypeVariable.class, oneDim.element()).name());
+
+        SignatureRefs.MethodRefs two = SignatureRefs.parseMethod("([[TT;)V");
+        Type.Array outer = assertInstanceOf(Type.Array.class, two.paramTypes().get(0));
+        Type.Array inner = assertInstanceOf(Type.Array.class, outer.element());
+        assertEquals("T", assertInstanceOf(Type.TypeVariable.class, inner.element()).name());
+    }
+
+    @Test
     void parseMethodCapturesMethodTypeParameterBounds() {
         SignatureRefs.MethodRefs refs = SignatureRefs.parseMethod(
                 "<E:Ljava/lang/Throwable;>(Ljava/lang/Throwable;)TE;");

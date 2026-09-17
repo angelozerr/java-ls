@@ -21,12 +21,9 @@ package ch.castleridge.javals.indexing.model;
  * not just the synthesised field/accessor pair.
  *
  * <p>Bytecode-derived entries populate this from the {@code Record}
- * classfile attribute; source-derived entries currently leave records
- * with an empty {@link TypeEntry#recordComponents()} list (still marked
- * with {@code ACC_RECORD}) - the canonical accessor methods are still
- * present, so name lookups against the record API keep working, but the
- * {@code RecordComponent} mirror is only fully populated for indexed
- * bytecode for now.
+ * classfile attribute; source-derived entries populate it from the
+ * record header so the class reader can synthesize accessors and the
+ * canonical constructor.
  */
 public record RecordComponentEntry(
         String name,

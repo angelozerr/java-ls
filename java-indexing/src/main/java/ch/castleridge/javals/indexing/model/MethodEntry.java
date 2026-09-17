@@ -76,6 +76,21 @@ public record MethodEntry(
         return out;
     }
 
+    /** Copy of this method with a replacement parameter list. */
+    public MethodEntry withParameters(ParameterEntry[] parameters) {
+        return new MethodEntry(
+                modifiers,
+                name,
+                returnType,
+                parameters,
+                throwsTypes,
+                typeParams,
+                varargs,
+                hasBody,
+                annotationDefault,
+                annotations);
+    }
+
     /** Backward-compatible constructor without method type parameters. */
     public MethodEntry(
             int modifiers,

@@ -61,6 +61,7 @@ import ch.castleridge.javals.indexing.model.EmptyArrays;
 import ch.castleridge.javals.indexing.model.FieldEntry;
 import ch.castleridge.javals.indexing.model.MethodEntry;
 import ch.castleridge.javals.indexing.model.ParameterEntry;
+import ch.castleridge.javals.indexing.model.RecordComponentEntry;
 import ch.castleridge.javals.indexing.model.ResourceUris;
 import ch.castleridge.javals.indexing.model.SourceResolutionHints;
 import ch.castleridge.javals.indexing.model.TypeDeclKind;
@@ -235,6 +236,15 @@ public final class JavacSourceIndexer {
             }
         }
 
+        List<RecordComponentEntry> recordComponents = new ArrayList<>();
+        if (declKind == TypeDeclKind.RECORD) {
+            for (Tree member : ct.getMembers()) {
+                if (member instanceof VariableTree vt && isRecordComponent(vt)) {
+                    recordComponents.add(toRecordComponent(vt, classTypeParams, localName));
+                }
+            }
+        }
+
         List<FieldEntry> fields = new ArrayList<>();
         List<MethodEntry> methods = new ArrayList<>();
         List<String> innerTypes = new ArrayList<>();
@@ -242,6 +252,10 @@ public final class JavacSourceIndexer {
 
         for (Tree member : ct.getMembers()) {
             if (member instanceof VariableTree vt) {
+                if (isRecordComponent(vt)) {
+                    fields.add(toRecordBackingField(vt, classTypeParams, localName));
+                    continue;
+                }
                 int fieldFlags = modifierFlags(vt.getModifiers());
                 if (isEnumConstant(vt)) {
                     fieldFlags |= Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL | Opcodes.ACC_ENUM;
@@ -255,7 +269,13 @@ public final class JavacSourceIndexer {
                 if (!AccessVisibility.shouldIndexMember(modifierFlags(mt.getModifiers()), methodName)) {
                     continue;
                 }
-                methods.add(toMethodEntry(mt, classTypeParams, localName));
+                MethodEntry method = toMethodEntry(mt, classTypeParams, localName);
+                if (declKind == TypeDeclKind.RECORD
+                        && isCompactRecordConstructor(mt, method)
+                        && !recordComponents.isEmpty()) {
+                    method = method.withParameters(recordComponentParameters(recordComponents));
+                }
+                methods.add(method);
             } else if (member instanceof ClassTree inner) {
                 if (!AccessVisibility.shouldIndexType(modifierFlags(inner.getModifiers()))) {
                     continue;
@@ -279,7 +299,7 @@ public final class JavacSourceIndexer {
                 EmptyArrays.toArray(methods, EmptyArrays.METHOD),
                 EmptyArrays.toArray(innerTypes, EmptyArrays.STRING),
                 EmptyArrays.toArray(permittedSubclasses, EmptyArrays.TYPE_REF),
-                EmptyArrays.RECORD_COMPONENT,
+                EmptyArrays.toArray(recordComponents, EmptyArrays.RECORD_COMPONENT),
                 annotationsOf(ct.getModifiers(), localName),
                 hints);
         into.add(entry);
@@ -306,15 +326,88 @@ public final class JavacSourceIndexer {
             flags |= Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL | Opcodes.ACC_ENUM;
         }
         Object constantValue = null;
+        TypeRef constantOwner = null;
+        String constantName = null;
         if ((flags & (Opcodes.ACC_STATIC | Opcodes.ACC_FINAL)) == (Opcodes.ACC_STATIC | Opcodes.ACC_FINAL)) {
             constantValue = literalConstantValue(vt.getInitializer());
+            if (constantValue == null) {
+                ConstantFieldRef ref = constantFieldRef(vt.getInitializer());
+                if (ref != null) {
+                    constantOwner = ref.owner;
+                    constantName = ref.name;
+                }
+            }
         }
         return new FieldEntry(
                 flags,
                 vt.getName().toString(),
                 toTypeRef(vt.getType(), typeParams, ownerJvm),
                 constantValue,
+                constantOwner,
+                constantName,
                 annotationsOf(vt.getModifiers(), ownerJvm));
+    }
+
+    private static RecordComponentEntry toRecordComponent(
+            VariableTree vt, Set<String> typeParams, String ownerJvm) {
+        return new RecordComponentEntry(
+                vt.getName().toString(),
+                toTypeRef(vt.getType(), typeParams, ownerJvm),
+                annotationsOf(vt.getModifiers(), ownerJvm));
+    }
+
+    private static FieldEntry toRecordBackingField(
+            VariableTree vt, Set<String> typeParams, String ownerJvm) {
+        int flags = modifierFlags(vt.getModifiers()) | Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL;
+        flags &= ~(Opcodes.ACC_PUBLIC | Opcodes.ACC_PROTECTED);
+        return new FieldEntry(
+                flags,
+                vt.getName().toString(),
+                toTypeRef(vt.getType(), typeParams, ownerJvm),
+                annotationsOf(vt.getModifiers(), ownerJvm));
+    }
+
+    private static boolean isRecordComponent(VariableTree vt) {
+        return vt instanceof JCTree.JCVariableDecl v && (v.mods.flags & Flags.RECORD) != 0;
+    }
+
+    private static boolean isCompactRecordConstructor(MethodTree mt, MethodEntry method) {
+        if (!"<init>".equals(method.name())) return false;
+        if (mt instanceof JCTree.JCMethodDecl md
+                && (md.mods.flags & Flags.COMPACT_RECORD_CONSTRUCTOR) != 0) {
+            return true;
+        }
+        return method.parameters().length == 0;
+    }
+
+    private static ParameterEntry[] recordComponentParameters(List<RecordComponentEntry> components) {
+        ParameterEntry[] parameters = new ParameterEntry[components.size()];
+        for (int i = 0; i < components.size(); i++) {
+            RecordComponentEntry component = components.get(i);
+            parameters[i] = new ParameterEntry(
+                    component.name(), 0, component.type(), component.annotations());
+        }
+        return parameters;
+    }
+
+    private record ConstantFieldRef(TypeRef owner, String name) {}
+
+    /**
+     * Capture a {@code TypeName.FIELD} or same-file identifier initializer so
+     * the class reader can fold it into a compile-time constant.
+     */
+    private static ConstantFieldRef constantFieldRef(ExpressionTree initializer) {
+        if (initializer instanceof IdentifierTree id) {
+            return new ConstantFieldRef(null, id.getName().toString());
+        }
+        if (initializer instanceof MemberSelectTree ms
+                && !ms.getIdentifier().contentEquals("class")) {
+            Type owner = typeRefForExpression(ms.getExpression());
+            if (owner instanceof TypeRef ownerRef) {
+                return new ConstantFieldRef(ownerRef, ms.getIdentifier().toString());
+            }
+        }
+        return null;
     }
 
     /**

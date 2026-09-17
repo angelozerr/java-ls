@@ -29,28 +29,43 @@ package ch.castleridge.javals.indexing.model;
  *
  * <p>Bytecode-derived entries populate this from the {@code ConstantValue}
  * classfile attribute; source-derived entries do a best-effort literal
- * extraction (typed literals and unary-minus over a numeric literal). A
- * {@code null} value just means "no compile-time constant known", and
- * downstream code falls back to the same behaviour as before.
+ * extraction (typed literals and unary-minus over a numeric literal). When
+ * the initializer is a field reference ({@code TypeName.FIELD} or a
+ * same-file identifier) rather than a literal, {@link #constantOwner()} and
+ * {@link #constantName()} record that alias so the class reader can copy
+ * the referenced field's constant. A {@code null} {@link #constantValue()}
+ * just means "no compile-time constant known yet".
  */
 public record FieldEntry(
         int modifiers,
         String name,
         Type type,
         Object constantValue,
+        TypeRef constantOwner,
+        String constantName,
         AnnotationRef[] annotations) implements IndexEntry {
 
     public FieldEntry {
         annotations = EmptyArrays.orEmpty(annotations, EmptyArrays.ANNOTATION_REF);
     }
 
-    /** Backward-compatible constructor without a constant value. */
+    /** Constructor for a field with a known constant value and no alias. */
+    public FieldEntry(
+            int modifiers,
+            String name,
+            Type type,
+            Object constantValue,
+            AnnotationRef[] annotations) {
+        this(modifiers, name, type, constantValue, null, null, annotations);
+    }
+
+    /** Constructor without a constant value. */
     public FieldEntry(
             int modifiers,
             String name,
             Type type,
             AnnotationRef[] annotations) {
-        this(modifiers, name, type, null, annotations);
+        this(modifiers, name, type, null, null, null, annotations);
     }
 
     @Override

@@ -49,8 +49,9 @@ final class IndexAccessFlags {
     /**
      * Mirror javac's {@code ClassReader.adjustClassFlags}: strip the
      * {@code ACC_SUPER} bit (which overlaps with {@code Flags.SYNCHRONIZED}
-     * in javac's flag space) and promote ASM's {@code ACC_MODULE} bit to
-     * javac's wider {@code Flags.MODULE} so module-info symbols are
+     * in javac's flag space) and promote ASM's {@code ACC_MODULE} /
+     * {@code ACC_RECORD} bits to javac's wider {@code Flags.MODULE} /
+     * {@code Flags.RECORD} so module-info and record symbols are
      * recognised correctly downstream.
      */
     private static long adjustClassFlags(int raw) {
@@ -58,6 +59,10 @@ final class IndexAccessFlags {
         if ((flags & Opcodes.ACC_MODULE) != 0) {
             flags &= ~Opcodes.ACC_MODULE;
             flags |= Flags.MODULE;
+        }
+        if ((flags & Opcodes.ACC_RECORD) != 0) {
+            flags &= ~Opcodes.ACC_RECORD;
+            flags |= Flags.RECORD;
         }
         return flags & ~Opcodes.ACC_SUPER;
     }

@@ -28,6 +28,7 @@ import ch.castleridge.javals.indexing.model.SourceTypeEntry;
 import ch.castleridge.javals.indexing.model.TypeEntry;
 import ch.castleridge.javals.indexing.source.javac.JavacSourceIndexer;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -161,6 +162,35 @@ class IndexAccessFlagsTest {
         long flags = IndexAccessFlags.classFlags(moduleInfo);
         assertHas(flags, Flags.MODULE);
         assertLacks(flags, Opcodes.ACC_MODULE);
+    }
+
+    @Test
+    void classFlagsMapAccRecordToFlagsRecord() {
+        TypeEntry bytecode = new ClassFileTypeEntry(
+                "index:///p/R.class",
+                "index:///bytecode/",
+                "p/R",
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_RECORD,
+                null,
+                EmptyArrays.TYPE,
+                EmptyArrays.TYPE_PARAM,
+                EmptyArrays.FIELD,
+                EmptyArrays.METHOD,
+                EmptyArrays.STRING,
+                EmptyArrays.ANNOTATION_REF);
+        long bytecodeFlags = IndexAccessFlags.classFlags(bytecode);
+        assertHas(bytecodeFlags, Flags.RECORD);
+        assertLacks(bytecodeFlags, Opcodes.ACC_RECORD);
+
+        TypeEntry source = indexSingle(
+                "package p;\n"
+                        + "public record R(int x) {}\n",
+                "p/R");
+        long sourceFlags = IndexAccessFlags.classFlags(source);
+        assertHas(sourceFlags, Flags.RECORD);
+        assertLacks(sourceFlags, Opcodes.ACC_RECORD);
+        assertEquals(1, source.recordComponents().length);
+        assertEquals("x", source.recordComponents()[0].name());
     }
 
     @Test

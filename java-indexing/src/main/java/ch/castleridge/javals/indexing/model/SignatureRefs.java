@@ -285,7 +285,7 @@ public final class SignatureRefs {
      */
     private abstract static class TypeFrame extends SignatureVisitor {
         protected final Consumer<Type> sink;
-        protected boolean array;
+        protected int arrayDimensions;
 
         TypeFrame(Consumer<Type> sink) {
             super(ASM_API);
@@ -304,15 +304,15 @@ public final class SignatureRefs {
 
         @Override
         public SignatureVisitor visitArrayType() {
-            array = true;
+            arrayDimensions++;
             return this;
         }
 
         protected void emit(Type type) {
-            if (array) {
+            for (int i = 0; i < arrayDimensions; i++) {
                 type = Type.array(type);
-                array = false;
             }
+            arrayDimensions = 0;
             sink.accept(type);
         }
     }

@@ -37,6 +37,7 @@ import ch.castleridge.javals.indexing.model.EmptyArrays;
 import ch.castleridge.javals.indexing.model.FieldEntry;
 import ch.castleridge.javals.indexing.model.MethodEntry;
 import ch.castleridge.javals.indexing.model.ParameterEntry;
+import ch.castleridge.javals.indexing.model.RecordComponentEntry;
 import ch.castleridge.javals.indexing.model.ResourceUris;
 import ch.castleridge.javals.indexing.model.SourceResolutionHints;
 import ch.castleridge.javals.indexing.model.SourceTypeEntry;
@@ -150,12 +151,28 @@ public final class TurbineSourceIndexer {
             permitted.add(toClassRef(type, classTypeParams, localName));
         }
 
+        TypeDeclKind kind = declKind(declaration);
+        List<RecordComponentEntry> recordComponents = new ArrayList<>();
+        Set<String> recordComponentNames = new HashSet<>();
+        if (kind == TypeDeclKind.RECORD) {
+            for (Tree.VarDecl component : declaration.components()) {
+                recordComponents.add(toRecordComponent(component, classTypeParams, localName));
+                recordComponentNames.add(component.name().value());
+            }
+        }
+
         List<FieldEntry> fields = new ArrayList<>();
         List<MethodEntry> methods = new ArrayList<>();
         List<Tree.TyDecl> nestedTypes = new ArrayList<>();
         List<String> innerNames = new ArrayList<>();
+        if (kind == TypeDeclKind.RECORD) {
+            for (Tree.VarDecl component : declaration.components()) {
+                fields.add(toRecordBackingField(component, classTypeParams, localName));
+            }
+        }
         for (Tree member : declaration.members()) {
             if (member instanceof Tree.VarDecl field) {
+                if (recordComponentNames.contains(field.name().value())) continue;
                 int flags = fieldModifierFlags(field, declaration);
                 if (!AccessVisibility.shouldIndexMember(flags, field.name().value())) continue;
                 fields.add(toFieldEntry(field, flags, classTypeParams, localName));
@@ -163,7 +180,13 @@ public final class TurbineSourceIndexer {
                 String name = methodName(method, simple);
                 int flags = methodModifierFlags(method, name, declaration);
                 if (!AccessVisibility.shouldIndexMember(flags, name)) continue;
-                methods.add(toMethodEntry(method, name, flags, classTypeParams, localName));
+                MethodEntry indexed = toMethodEntry(method, name, flags, classTypeParams, localName);
+                if (kind == TypeDeclKind.RECORD
+                        && isCompactRecordConstructor(method, indexed)
+                        && !recordComponents.isEmpty()) {
+                    indexed = indexed.withParameters(recordComponentParameters(recordComponents));
+                }
+                methods.add(indexed);
             } else if (member instanceof Tree.TyDecl nested) {
                 if (!AccessVisibility.shouldIndexType(typeModifierFlags(nested, declaration))) continue;
                 nestedTypes.add(nested);
@@ -176,7 +199,7 @@ public final class TurbineSourceIndexer {
                 sourceUri,
                 localName,
                 declarationFlags,
-                declKind(declaration),
+                kind,
                 superType,
                 EmptyArrays.toArray(interfaces, EmptyArrays.TYPE),
                 EmptyArrays.toArray(typeParameters, EmptyArrays.TYPE_PARAM),
@@ -184,7 +207,7 @@ public final class TurbineSourceIndexer {
                 EmptyArrays.toArray(methods, EmptyArrays.METHOD),
                 EmptyArrays.toArray(innerNames, EmptyArrays.STRING),
                 EmptyArrays.toArray(permitted, EmptyArrays.TYPE_REF),
-                EmptyArrays.RECORD_COMPONENT,
+                EmptyArrays.toArray(recordComponents, EmptyArrays.RECORD_COMPONENT),
                 annotationsOf(declaration.annos(), localName),
                 hints);
         into.add(entry);
@@ -203,16 +226,77 @@ public final class TurbineSourceIndexer {
     private static FieldEntry toFieldEntry(
             Tree.VarDecl field, int flags, Set<String> typeParams, String ownerJvm) {
         Object constant = null;
+        TypeRef constantOwner = null;
+        String constantName = null;
         if ((flags & (Opcodes.ACC_STATIC | Opcodes.ACC_FINAL))
                 == (Opcodes.ACC_STATIC | Opcodes.ACC_FINAL)) {
             constant = field.init().map(TurbineSourceIndexer::literalConstantValue).orElse(null);
+            if (constant == null) {
+                ConstantFieldRef ref = field.init()
+                        .map(init -> constantFieldRef(init, ownerJvm))
+                        .orElse(null);
+                if (ref != null) {
+                    constantOwner = ref.owner;
+                    constantName = ref.name;
+                }
+            }
         }
         return new FieldEntry(
                 flags,
                 field.name().value(),
                 toType(field.ty(), typeParams, ownerJvm),
                 constant,
+                constantOwner,
+                constantName,
                 annotationsOf(field.annos(), ownerJvm));
+    }
+
+    private static RecordComponentEntry toRecordComponent(
+            Tree.VarDecl component, Set<String> typeParams, String ownerJvm) {
+        return new RecordComponentEntry(
+                component.name().value(),
+                toType(component.ty(), typeParams, ownerJvm),
+                annotationsOf(component.annos(), ownerJvm));
+    }
+
+    private static FieldEntry toRecordBackingField(
+            Tree.VarDecl component, Set<String> typeParams, String ownerJvm) {
+        int flags = modifierFlags(component.mods()) | Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL;
+        flags &= ~(Opcodes.ACC_PUBLIC | Opcodes.ACC_PROTECTED);
+        return new FieldEntry(
+                flags,
+                component.name().value(),
+                toType(component.ty(), typeParams, ownerJvm),
+                annotationsOf(component.annos(), ownerJvm));
+    }
+
+    private static boolean isCompactRecordConstructor(Tree.MethDecl method, MethodEntry indexed) {
+        if (!"<init>".equals(indexed.name())) return false;
+        if (method.mods().contains(TurbineModifier.COMPACT_CTOR)) return true;
+        return indexed.parameters().length == 0;
+    }
+
+    private static ParameterEntry[] recordComponentParameters(List<RecordComponentEntry> components) {
+        ParameterEntry[] parameters = new ParameterEntry[components.size()];
+        for (int i = 0; i < components.size(); i++) {
+            RecordComponentEntry component = components.get(i);
+            parameters[i] = new ParameterEntry(
+                    component.name(), 0, component.type(), component.annotations());
+        }
+        return parameters;
+    }
+
+    private record ConstantFieldRef(TypeRef owner, String name) {}
+
+    private static ConstantFieldRef constantFieldRef(Tree.Expression expression, String ownerJvm) {
+        if (!(expression instanceof Tree.ConstVarName constant)) return null;
+        List<String> parts = identValues(constant.name());
+        if (parts.isEmpty()) return null;
+        String name = parts.remove(parts.size() - 1);
+        if (parts.isEmpty()) {
+            return new ConstantFieldRef(null, name);
+        }
+        return new ConstantFieldRef(classRef(parts, ownerJvm), name);
     }
 
     private static MethodEntry toMethodEntry(

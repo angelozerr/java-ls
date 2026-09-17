@@ -344,7 +344,7 @@ final class IndexAnnotations {
 
         if (value instanceof AnnotationValue.ClassRef cr) {
 
-            Type classType = resolveTypeRef(cr.type(), module);
+            Type classType = resolveTypeRef(cr.type(), module, enclosing);
 
             if (classType == null || classType.isErroneous()) {
 
@@ -358,7 +358,7 @@ final class IndexAnnotations {
 
         if (value instanceof AnnotationValue.EnumConst ec) {
 
-            Type enumType = resolveTypeRef(ec.enumType(), module);
+            Type enumType = resolveTypeRef(ec.enumType(), module, enclosing);
 
             if (enumType == null || enumType.isErroneous() || isUnresolvedSentinel(ec.enumType())) {
 
@@ -438,7 +438,9 @@ final class IndexAnnotations {
      * 
      */
 
-    private Type resolveTypeRef(ch.castleridge.javals.indexing.model.Type ref, ModuleSymbol module) {
+    private Type resolveTypeRef(ch.castleridge.javals.indexing.model.Type ref,
+                                ModuleSymbol module,
+                                TypeEntry enclosing) {
 
         if (ref == null)
             return null;
@@ -471,7 +473,7 @@ final class IndexAnnotations {
 
         if (ref instanceof Array a) {
 
-            Type elem = resolveTypeRef(a.element(), module);
+            Type elem = resolveTypeRef(a.element(), module, enclosing);
 
             if (elem == null)
                 return null;
@@ -480,21 +482,22 @@ final class IndexAnnotations {
 
         }
 
-        if (ref instanceof TypeRef.Resolved r) {
+        if (ref instanceof TypeRef tr) {
 
-            ClassSymbol c = enterClass(module, r.jvmBinaryName());
+            ClassSymbol c = resolver.resolveTypeRef(tr, module, enclosing);
 
-            return c == null ? null : c.type;
+            if (c == null)
+                return null;
 
-        }
+            try {
 
-        if (ref instanceof TypeRef.Unresolved) {
+                c.complete();
 
-            // Indexer couldn't pin down the qualifier; rely on the
+            } catch (CompletionFailure ignored) {
 
-            // expected element type at the call site.
+            }
 
-            return null;
+            return c.type;
 
         }
 
@@ -505,31 +508,6 @@ final class IndexAnnotations {
     private boolean isUnresolvedSentinel(ch.castleridge.javals.indexing.model.Type ref) {
 
         return ref instanceof TypeRef.Unresolved;
-
-    }
-
-    private ClassSymbol enterClass(ModuleSymbol module, String jvmBinaryName) {
-
-        if (jvmBinaryName == null || jvmBinaryName.isEmpty())
-            return null;
-
-        String dotted = jvmBinaryName.replace('/', '.');
-
-        ClassSymbol c = syms.enterClass(module, names.fromString(dotted));
-
-        try {
-
-            c.complete();
-
-        } catch (CompletionFailure ignored) {
-
-            // Best-effort: the symbol may still be usable as a Type
-
-            // reference even if its members couldn't be loaded.
-
-        }
-
-        return c;
 
     }
 
