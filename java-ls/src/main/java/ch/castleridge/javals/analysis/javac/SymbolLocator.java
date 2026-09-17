@@ -238,19 +238,23 @@ public final class SymbolLocator {
         List<String> wantParamSig = paramSimpleNames(ee);
 
         MethodTree byArity = null;
-        int arityMatches = 0;
         for (Tree m : owner.getMembers()) {
             if (!(m instanceof MethodTree mt)) continue;
             String name = methodTreeName(mt);
             if (!name.equals(wantName)) continue;
             if (mt.getParameters().size() != wantArity) continue;
-            arityMatches++;
             if (byArity == null) byArity = mt;
             if (paramSimpleNamesFromTree(mt).equals(wantParamSig)) {
                 return mt;
             }
         }
-        return arityMatches == 1 ? byArity : byArity;
+        if (byArity != null) return byArity;
+        // Implicit record accessors have no MethodTree; the component
+        // VariableTree in the header is the declaration users expect.
+        Tree component = pickFieldByName(wantName, owner);
+        if (component != null) return component;
+        // Enum values()/valueOf() and similar synthetics: the type name.
+        return owner;
     }
 
     private static String methodTreeName(MethodTree mt) {
@@ -258,7 +262,10 @@ public final class SymbolLocator {
     }
 
     private static Tree pickField(VariableElement ve, ClassTree owner) {
-        String name = ve.getSimpleName().toString();
+        return pickFieldByName(ve.getSimpleName().toString(), owner);
+    }
+
+    private static Tree pickFieldByName(String name, ClassTree owner) {
         for (Tree m : owner.getMembers()) {
             if (m instanceof VariableTree vt && vt.getName().toString().equals(name)) {
                 return vt;

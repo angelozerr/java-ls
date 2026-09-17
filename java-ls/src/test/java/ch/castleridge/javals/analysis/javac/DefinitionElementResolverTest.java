@@ -81,4 +81,64 @@ class DefinitionElementResolverTest {
         assertTrue(element.getKind() == ElementKind.FIELD);
         assertTrue(element.getSimpleName().contentEquals("ISO_INSTANT"));
     }
+
+    @Test
+    void elidedAnnotationArgumentResolvesToFieldNotAnnotationType() throws Exception {
+        assertAnnotationArgumentResolvesToField(
+                """
+                        @interface Ann { String value(); }
+                        class Names { static final String X = "x"; }
+                        @Ann(Names.X)
+                        class Use {}
+                        """,
+                "@Ann(Names.X)");
+    }
+
+    @Test
+    void explicitAnnotationArgumentResolvesToField() throws Exception {
+        assertAnnotationArgumentResolvesToField(
+                """
+                        @interface Ann { String value(); }
+                        class Names { static final String X = "x"; }
+                        @Ann(value = Names.X)
+                        class Use {}
+                        """,
+                "@Ann(value = Names.X)");
+    }
+
+    private static void assertAnnotationArgumentResolvesToField(String source, String annotationLine)
+            throws Exception {
+        Path jdk = Path.of(System.getProperty("java.home"));
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                Files.isDirectory(jdk),
+                "JDK not present");
+
+        JrtInput jrt = new JrtInput(jdk);
+        Index index = new InMemoryIndex();
+        List<Throwable> failures = new Scanner().scanAll(List.of(jrt), index);
+        assertTrue(failures.isEmpty(), () -> "JRT scan failures: " + failures);
+
+        ClasspathOrder cp = new ClasspathOrder(
+                List.of(jrt.sourceUri()).stream().map(UriClasspathEntry::of).collect(Collectors.toList()),
+                false);
+        JavacWorkspaceCompiler.Result compiled = JavacWorkspaceCompiler.compile(
+                URI.create("mem:///Use.java"), source, index, cp);
+
+        CompilationUnitTree cu = compiled.cu();
+        assertNotNull(cu);
+        Trees trees = compiled.trees();
+        LineMap lm = cu.getLineMap();
+        int line = 3;
+        long offset = lm.getPosition(line, annotationLine.indexOf('X') + 1);
+
+        TreePath path = TreePathLocator.findAt(trees, cu, offset);
+        assertNotNull(path, "cursor on X must land on an AST node");
+
+        Element element = DefinitionElementResolver.resolve(trees, path);
+        assertNotNull(element, "Names.X in an annotation argument must resolve to a symbol");
+        assertInstanceOf(VariableElement.class, element);
+        assertTrue(element.getKind() == ElementKind.FIELD, () -> "expected FIELD, got " + element.getKind());
+        assertTrue(element.getSimpleName().contentEquals("X"),
+                () -> "expected field X, got " + element.getKind() + " " + element.getSimpleName());
+    }
 }

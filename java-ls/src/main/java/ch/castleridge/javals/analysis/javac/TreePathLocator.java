@@ -22,6 +22,12 @@ import com.sun.source.util.Trees;
  * contains a given character offset, then returns its {@link TreePath}.
  * Used by the LSP request handlers to map a cursor position back onto a
  * javac AST node.
+ *
+ * <p>javac rewrites some trees after parsing (elided annotation
+ * {@code value =} assigns, single-element array shorthand) and leaves
+ * those wrappers without an end position. Those nodes are still walked
+ * so the original argument expression can be found; they are not
+ * themselves treated as the deepest match.
  */
 public final class TreePathLocator {
 
@@ -61,7 +67,11 @@ public final class TreePathLocator {
             if (!isCu) {
                 long start = sp.getStartPosition(cu, tree);
                 long end = sp.getEndPosition(cu, tree);
-                if (start < 0 || end < 0 || offset < start || offset >= end) {
+                if (end < 0) {
+                    super.scan(tree, p);
+                    return null;
+                }
+                if (start < 0 || offset < start || offset >= end) {
                     return null;
                 }
             }
