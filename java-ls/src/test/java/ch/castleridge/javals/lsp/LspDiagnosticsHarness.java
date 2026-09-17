@@ -99,6 +99,21 @@ public final class LspDiagnosticsHarness implements AutoCloseable {
         return start(workspaceRoot, initTimeout, Map.of());
     }
 
+    /**
+     * {@code -Dbackend.sourceIndexer=ecj -Dbackend.classIndexer=turbine -Dbackend.compiler=ecj}
+     * select backend implementations for harness CLIs.
+     */
+    public static Map<String, Object> backendOptionsFromSystemProperties() {
+        Map<String, Object> backend = new HashMap<>();
+        String sourceIndexer = System.getProperty("backend.sourceIndexer");
+        String classIndexer = System.getProperty("backend.classIndexer");
+        String compiler = System.getProperty("backend.compiler");
+        if (sourceIndexer != null) backend.put("sourceIndexer", sourceIndexer);
+        if (classIndexer != null) backend.put("classIndexer", classIndexer);
+        if (compiler != null) backend.put("compiler", compiler);
+        return backend.isEmpty() ? Map.of() : Map.of("backend", backend);
+    }
+
     public static LspDiagnosticsHarness start(Path workspaceRoot,
                                               Duration initTimeout,
                                               Map<String, Object> extraInitOptions) throws Exception {

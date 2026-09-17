@@ -142,6 +142,8 @@ class IndexBinaryTypeTest {
                 index.getAll("demo/Color").get(0), index, classpath());
 
         assertEquals("java/lang/Enum", new String(binary.getSuperclassName()));
+        assertNotNull(binary.getGenericSignature());
+        assertEquals("Ljava/lang/Enum<Ldemo/Color;>;", new String(binary.getGenericSignature()));
         assertNotNull(findMethod(binary, "values"));
         assertEquals("()[Ldemo/Color;", new String(findMethod(binary, "values").getMethodDescriptor()));
         assertNotNull(findMethod(binary, "valueOf"));
@@ -194,6 +196,38 @@ class IndexBinaryTypeTest {
         char[][] permits = binary.getPermittedSubtypesNames();
         assertNotNull(permits);
         assertEquals("demo/Origin", new String(permits[0]));
+    }
+
+    @Test
+    void resolvesUnresolvedPermittedSubtypesAgainstSamePackage() {
+        InMemoryIndex index = new InMemoryIndex();
+        index.add(new SourceTypeEntry(
+                "demo/Shape.java",
+                SOURCE,
+                "demo/Shape",
+                ClassFileConstants.AccPublic,
+                TypeDeclKind.INTERFACE,
+                TypeRef.resolved("java/lang/Object"),
+                EmptyArrays.TYPE,
+                EmptyArrays.TYPE_PARAM,
+                EmptyArrays.FIELD,
+                EmptyArrays.METHOD,
+                EmptyArrays.STRING,
+                new TypeRef[] { TypeRef.unresolved("Circle"), TypeRef.unresolved("Square") },
+                EmptyArrays.RECORD_COMPONENT,
+                EmptyArrays.ANNOTATION_REF,
+                new SourceResolutionHints("demo", Map.of(), EmptyArrays.STRING, Set.of("Shape"))));
+        index.add(sourceClass("demo/Circle", TypeDeclKind.CLASS));
+        index.add(sourceClass("demo/Square", TypeDeclKind.CLASS));
+
+        IBinaryType binary = IndexBinaryType.of(
+                index.getAll("demo/Shape").get(0), index, classpath());
+
+        char[][] permits = binary.getPermittedSubtypesNames();
+        assertNotNull(permits);
+        assertEquals(2, permits.length);
+        assertEquals("demo/Circle", new String(permits[0]));
+        assertEquals("demo/Square", new String(permits[1]));
     }
 
     @Test

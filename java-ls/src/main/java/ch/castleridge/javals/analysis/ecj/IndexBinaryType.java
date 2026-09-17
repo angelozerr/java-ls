@@ -86,7 +86,7 @@ final class IndexBinaryType implements IBinaryType {
         this.interfaceNames = toCharArrays(encoding.interfaceNames());
         String signature = encoding.classSignature();
         this.genericSignature = signature == null ? null : signature.toCharArray();
-        this.permittedSubtypes = permitted(entry);
+        this.permittedSubtypes = permitted(entry, encoding);
         this.modifiers = modifiers(entry, index, order);
         this.tagBits = IndexBinaryAccessFlags.annotationTagBits(annotationsOf(entry));
         this.record = IndexBinaryAccessFlags.isRecord(entry);
@@ -391,15 +391,12 @@ final class IndexBinaryType implements IBinaryType {
         return out;
     }
 
-    private static char[][] permitted(TypeEntry entry) {
+    private static char[][] permitted(TypeEntry entry, IndexTypeEncoding encoding) {
         TypeRef[] permitted = entry.permittedSubclasses();
         if (permitted.length == 0) return null;
         char[][] names = new char[permitted.length][];
         for (int i = 0; i < permitted.length; i++) {
-            names[i] = switch (permitted[i]) {
-                case TypeRef.Resolved resolved -> resolved.jvmBinaryName().toCharArray();
-                case TypeRef.Unresolved unresolved -> unresolved.simpleName().replace('.', '/').toCharArray();
-            };
+            names[i] = encoding.erasedJvm(permitted[i]).toCharArray();
         }
         return names;
     }

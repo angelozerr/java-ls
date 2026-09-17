@@ -18,8 +18,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.eclipse.jdt.internal.compiler.classfmt.ClassFileConstants;
+
 import ch.castleridge.javals.classpath.ClasspathOrder;
 import ch.castleridge.javals.indexing.index.Index;
+import ch.castleridge.javals.indexing.model.FieldEntry;
 import ch.castleridge.javals.indexing.model.MethodEntry;
 import ch.castleridge.javals.indexing.model.SourceResolutionHints;
 import ch.castleridge.javals.indexing.model.SourceTypeEntry;
@@ -83,18 +86,24 @@ final class IndexTypeEncoding {
     }
 
     String classSignature() {
+        boolean enumSignature = isEnumType() && !hasParameterizedEnumSuper();
         if (owner.typeParams().length == 0
                 && !needsSignature(owner.superRef())
-                && !anyNeedsSignature(owner.interfaceRefs())) {
+                && !anyNeedsSignature(owner.interfaceRefs())
+                && !enumSignature) {
             return null;
         }
         StringBuilder out = new StringBuilder();
         appendTypeParameters(out, owner.typeParams());
-        Type superType = owner.superRef() == null
-                ? (superName() == null ? null : TypeRef.resolved(superName()))
-                : owner.superRef();
-        if (superType != null) out.append(signature(superType));
-        else out.append("Ljava/lang/Object;");
+        if (enumSignature) {
+            out.append("Ljava/lang/Enum<L").append(owner.jvmOwnerName()).append(";>;");
+        } else {
+            Type superType = owner.superRef() == null
+                    ? (superName() == null ? null : TypeRef.resolved(superName()))
+                    : owner.superRef();
+            if (superType != null) out.append(signature(superType));
+            else out.append("Ljava/lang/Object;");
+        }
         for (Type iface : owner.interfaceRefs()) out.append(signature(iface));
         if (isAnnotationType() && !hasInterface("java/lang/annotation/Annotation")) {
             out.append("Ljava/lang/annotation/Annotation;");
@@ -188,6 +197,45 @@ final class IndexTypeEncoding {
         String simple = ((TypeRef.Unresolved) ref).simpleName();
         if (!(owner instanceof SourceTypeEntry)) return simple.replace('.', '/');
         return resolveCached(simple);
+    }
+
+    /**
+     * Follow a one-or-more hop field-ref initializer ({@code X = Other.NAME})
+     * until a literal {@link FieldEntry#constantValue()} is found, matching
+     * javac's {@code IndexClassReader.foldConstantValue}. Without this, ECJ
+     * treats {@code StandardTypes.DOUBLE} as a non-constant and rejects it as
+     * an annotation member value.
+     */
+    Object foldConstant(FieldEntry field) {
+        return foldConstant(field, owner, new HashSet<>());
+    }
+
+    private Object foldConstant(FieldEntry field, TypeEntry enclosing, Set<String> visiting) {
+        if (field.constantValue() != null) return field.constantValue();
+        if (field.constantName() == null) return null;
+        String key = enclosing.jvmOwnerName() + "#" + field.name();
+        if (!visiting.add(key)) return null;
+
+        TypeEntry ownerEntry = enclosing;
+        if (field.constantOwner() != null) {
+            String jvmName = resolveFrom(field.constantOwner(), enclosing);
+            ownerEntry = classpath.pick(index.getAll(jvmName), TypeEntry::sourceUri);
+            if (ownerEntry == null) return null;
+        }
+        for (FieldEntry candidate : ownerEntry.fields()) {
+            if (field.constantName().equals(candidate.name())) {
+                return foldConstant(candidate, ownerEntry, visiting);
+            }
+        }
+        return null;
+    }
+
+    private String resolveFrom(TypeRef ref, TypeEntry context) {
+        if (ref instanceof TypeRef.Resolved resolved) return qualify(resolved.jvmBinaryName());
+        String simple = ((TypeRef.Unresolved) ref).simpleName();
+        if (!(context instanceof SourceTypeEntry source)) return simple.replace('.', '/');
+        String imported = importedName(simple, source.hints());
+        return imported != null ? imported : join(source.hints().sourcePackage(), simple);
     }
 
     /**
@@ -372,6 +420,23 @@ final class IndexTypeEncoding {
             return source.declKind() == TypeDeclKind.ANNOTATION;
         }
         return (IndexBinaryAccessFlags.rawModifiers(owner) & IndexBinaryAccessFlags.ACC_ANNOTATION) != 0;
+    }
+
+    private boolean isEnumType() {
+        if (owner instanceof SourceTypeEntry source) {
+            return source.declKind() == TypeDeclKind.ENUM;
+        }
+        return (IndexBinaryAccessFlags.rawModifiers(owner) & ClassFileConstants.AccEnum) != 0;
+    }
+
+    /**
+     * Bytecode already records {@code Enum<This>} as a parameterized super.
+     * Re-wrapping that would produce an illegal signature.
+     */
+    private boolean hasParameterizedEnumSuper() {
+        Type superType = IndexTypeEncoding.unwrap(owner.superRef());
+        return superType instanceof Parameterized parameterized
+                && "java/lang/Enum".equals(resolve(parameterized.raw()));
     }
 
     private boolean available(String jvmName) {

@@ -105,10 +105,13 @@ public final class LspWorkspaceDiagnosticsMain {
         int filesProcessed = 0;
         int filesFailed = 0;
 
-        try (LspDiagnosticsHarness harness = LspDiagnosticsHarness.start(workspaceRoot, Duration.ofSeconds(120))) {
+        try (LspDiagnosticsHarness harness = LspDiagnosticsHarness.start(
+                workspaceRoot, Duration.ofSeconds(120),
+                LspDiagnosticsHarness.backendOptionsFromSystemProperties())) {
             System.err.println("Server started; waiting for indexing to finish...");
             harness.awaitIndexReady(INDEX_TIMEOUT);
             System.err.println("Index ready. Opening files one at a time.");
+            harness.logMessages().forEach(m -> System.err.println("  " + m));
 
             for (Path file : javaFiles) {
                 filesProcessed++;

@@ -15,6 +15,7 @@ import org.eclipse.jdt.internal.compiler.lookup.ExtraCompilerModifiers;
 import org.eclipse.jdt.internal.compiler.lookup.TagBits;
 
 import ch.castleridge.javals.indexing.model.AnnotationRef;
+import ch.castleridge.javals.indexing.model.AnnotationValue;
 import ch.castleridge.javals.indexing.model.ClassFileTypeEntry;
 import ch.castleridge.javals.indexing.model.FieldEntry;
 import ch.castleridge.javals.indexing.model.MethodEntry;
@@ -122,11 +123,73 @@ final class IndexBinaryAccessFlags {
         if (annotations == null || annotations.length == 0) return 0L;
         long bits = 0L;
         for (AnnotationRef ref : annotations) {
-            if ("java/lang/Deprecated".equals(ref.jvmName())) {
+            String jvm = ref.jvmName();
+            if ("java/lang/Deprecated".equals(jvm) || "Deprecated".equals(jvm)) {
                 bits |= TagBits.AnnotationDeprecated;
+            } else if ("java/lang/annotation/Target".equals(jvm) || "Target".equals(jvm)) {
+                bits |= targetTagBits(ref);
+            } else if ("java/lang/annotation/Retention".equals(jvm) || "Retention".equals(jvm)) {
+                bits |= retentionTagBits(ref);
+            } else if ("java/lang/annotation/Documented".equals(jvm) || "Documented".equals(jvm)) {
+                bits |= TagBits.AnnotationDocumented;
+            } else if ("java/lang/annotation/Inherited".equals(jvm) || "Inherited".equals(jvm)) {
+                bits |= TagBits.AnnotationInherited;
+            } else if ("java/lang/annotation/Repeatable".equals(jvm) || "Repeatable".equals(jvm)) {
+                bits |= TagBits.AnnotationRepeatable;
             }
         }
         return bits;
+    }
+
+    /**
+     * Mirror ECJ {@code AnnotationInfo.readTargetValue}: {@code @Target({})}
+     * sets only {@link TagBits#AnnotationTarget}; each {@code ElementType}
+     * constant sets the corresponding {@code AnnotationFor*} bit. Without
+     * these, a TYPE_USE annotation from the index is treated as having no
+     * explicit targets and cannot be applied to type arguments.
+     */
+    private static long targetTagBits(AnnotationRef ref) {
+        AnnotationValue value = ref.values() == null ? null : ref.values().get("value");
+        if (value == null) return 0L;
+        if (value instanceof AnnotationValue.Arr arr) {
+            if (arr.elements().length == 0) return TagBits.AnnotationTarget;
+            long bits = 0L;
+            for (AnnotationValue element : arr.elements()) {
+                bits |= targetElementBit(element);
+            }
+            return bits;
+        }
+        return targetElementBit(value);
+    }
+
+    private static long targetElementBit(AnnotationValue value) {
+        if (!(value instanceof AnnotationValue.EnumConst enumConst)) return 0L;
+        return switch (enumConst.constant()) {
+            case "TYPE" -> TagBits.AnnotationForType;
+            case "FIELD" -> TagBits.AnnotationForField;
+            case "METHOD" -> TagBits.AnnotationForMethod;
+            case "PARAMETER" -> TagBits.AnnotationForParameter;
+            case "CONSTRUCTOR" -> TagBits.AnnotationForConstructor;
+            case "LOCAL_VARIABLE" -> TagBits.AnnotationForLocalVariable;
+            case "ANNOTATION_TYPE" -> TagBits.AnnotationForAnnotationType;
+            case "PACKAGE" -> TagBits.AnnotationForPackage;
+            case "TYPE_USE" -> TagBits.AnnotationForTypeUse;
+            case "TYPE_PARAMETER" -> TagBits.AnnotationForTypeParameter;
+            case "MODULE" -> TagBits.AnnotationForModule;
+            case "RECORD_COMPONENT" -> TagBits.AnnotationForRecordComponent;
+            default -> 0L;
+        };
+    }
+
+    private static long retentionTagBits(AnnotationRef ref) {
+        AnnotationValue value = ref.values() == null ? null : ref.values().get("value");
+        if (!(value instanceof AnnotationValue.EnumConst enumConst)) return 0L;
+        return switch (enumConst.constant()) {
+            case "SOURCE" -> TagBits.AnnotationSourceRetention;
+            case "CLASS" -> TagBits.AnnotationClassRetention;
+            case "RUNTIME" -> TagBits.AnnotationRuntimeRetention;
+            default -> 0L;
+        };
     }
 
     static boolean isRecord(TypeEntry entry) {

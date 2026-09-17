@@ -12,9 +12,7 @@ package ch.castleridge.javals.lsp;
 
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import org.eclipse.lsp4j.Diagnostic;
 import org.eclipse.lsp4j.DiagnosticSeverity;
@@ -42,7 +40,8 @@ public final class LspDiagnosticsHarnessMain {
         boolean hasErrors = false;
 
         try (LspDiagnosticsHarness harness =
-                LspDiagnosticsHarness.start(workspaceRoot, TIMEOUT, backendOptions())) {
+                LspDiagnosticsHarness.start(workspaceRoot, TIMEOUT,
+                        LspDiagnosticsHarness.backendOptionsFromSystemProperties())) {
             try {
                 harness.awaitIndexReady(TIMEOUT);
             } catch (Exception e) {
@@ -78,21 +77,6 @@ public final class LspDiagnosticsHarnessMain {
         }
 
         System.exit(hasErrors ? 1 : 0);
-    }
-
-    /**
-     * {@code -Dbackend.sourceIndexer=ecj -Dbackend.classIndexer=turbine -Dbackend.compiler=ecj}
-     * select backend implementations.
-     */
-    private static Map<String, Object> backendOptions() {
-        Map<String, Object> backend = new HashMap<>();
-        String sourceIndexer = System.getProperty("backend.sourceIndexer");
-        String classIndexer = System.getProperty("backend.classIndexer");
-        String compiler = System.getProperty("backend.compiler");
-        if (sourceIndexer != null) backend.put("sourceIndexer", sourceIndexer);
-        if (classIndexer != null) backend.put("classIndexer", classIndexer);
-        if (compiler != null) backend.put("compiler", compiler);
-        return backend.isEmpty() ? Map.of() : Map.of("backend", backend);
     }
 
     private static void printDiagnostics(Path file, List<Diagnostic> diagnostics) {
